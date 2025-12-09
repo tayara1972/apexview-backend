@@ -24,55 +24,81 @@ app.get('/', (req, res) => {
   });
 });
 
+// server.js
+
 app.get('/quotes', async (req, res) => {
+  const symbolsParam = req.query.symbols;
+  if (!symbolsParam) {
+    return res.status(400).json({ error: 'symbols query param is required' });
+  }
+
+  const symbols = symbolsParam
+    .split(',')
+    .map(s => s.trim().toUpperCase())
+    .filter(Boolean);
+
+  if (symbols.length === 0) {
+    return res.status(400).json({ error: 'No valid symbols provided' });
+  }
+
+  const yahooUrl =
+    'https://query1.finance.yahoo.com/v7/finance/quote?symbols=' +
+    encodeURIComponent(symbols.join(','));
+
   try {
-    const symbolsParam = req.query.symbols;
-
-    if (!symbolsParam) {
-      return res.status(400).json({
-        error: 'symbols query parameter is required, e.g. /quotes?symbols=AAPL,MSFT'
-      });
+    const yahooResp = await fetch(yahooUrl);
+    if (!yahooResp.ok) {
+      throw new Error(`Yahoo status ${yahooResp.status}`);
     }
 
-    const symbols = symbolsParam
-      .split(',')
-      .map((s) => s.trim().toUpperCase())
-      .filter(Boolean);
+    const json = await yahooResp.json();
+    const list = (json.quoteResponse && json.quoteResponse.result) || [];
 
-    if (symbols.length === 0) {
-      return res.status(400).json({ error: 'At least one symbol must be provided' });
+    const result = {};
+
+    for (const q of list) {
+      const sym = (q.symbol || '').toUpperCase();
+      if (!sym) continue;
+
+      result[sym] = {
+        symbol: sym,
+        previousClose: q.regularMarketPreviousClose ?? null,
+        current:       q.regularMarketPrice        ?? null,
+        high:          q.regularMarketDayHigh      ?? null,
+        low:           q.regularMarketDayLow       ?? null,
+        open:          q.regularMarketOpen         ?? null,
+        provider: 'yahoo'
+      };
     }
 
-    const cacheKey = symbols.join(',');
-    const now = Date.now();
-    const cached = cache.get(cacheKey);
-
-    if (cached && now - cached.timestamp < CACHE_TTL_MS) {
-      return res.json({
-        source: 'cache',
-        data: cached.data
-      });
+    // Ensure every requested symbol has an entry
+    for (const s of symbols) {
+      if (!result[s]) {
+        result[s] = {
+          symbol: s,
+          previousClose: null,
+          current: null,
+          high: null,
+          low: null,
+          open: null,
+          provider: 'yahoo'
+        };
+      }
     }
 
-    const liveData = await fetchQuotesFromFinnhub(symbols);
-
-    cache.set(cacheKey, {
-      timestamp: now,
-      data: liveData
-    });
-
-    return res.json({
+    res.json({
       source: 'live',
-      data: liveData
+      data: result
     });
   } catch (err) {
-    console.error('Error in /quotes:', err.message);
+    console.error('Error in /quotes:', err);
     res.status(500).json({
       error: 'Failed to fetch quotes',
-      message: err.message
+      message: String(err)
     });
   }
 });
+
 
 async function fetchQuotesFromFinnhub(symbols) {
   const apiKey = process.env.FINNHUB_API_KEY;
