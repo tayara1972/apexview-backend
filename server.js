@@ -56,6 +56,10 @@ async function fetchPreviousClose(symbol) {
     throw new Error(`Alpha Vantage note for ${symbol}: ${data["Note"]}`);
   }
 
+    if (data["Information"]) {
+    throw new Error(`Alpha Vantage information for ${symbol}: ${data["Information"]}`);
+  }
+  
   const quote = data["Global Quote"];
   if (!quote) {
     throw new Error(`No Global Quote returned for ${symbol}`);
@@ -81,6 +85,25 @@ async function fetchPreviousClose(symbol) {
 app.get("/", (req, res) => {
   res.send("ApexView quotes backend is running");
 });
+
+// Temporary debug route: see raw Alpha Vantage response for AAPL
+app.get("/debug-aapl", async (req, res) => {
+  try {
+    const url = "https://www.alphavantage.co/query";
+    const params = {
+      function: "GLOBAL_QUOTE",
+      symbol: "AAPL",
+      apikey: ALPHA_VANTAGE_KEY
+    };
+
+    const response = await axios.get(url, { params });
+    res.json(response.data);
+  } catch (err) {
+    console.error("Error in /debug-aapl:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 // Main endpoint: GET /quotes?symbols=AAPL,MSFT
 app.get("/quotes", async (req, res) => {
