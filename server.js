@@ -1,183 +1,119 @@
-require("dotenv").config();
-const express = require("express");
-const axios = require("axios");
+require('dotenv').config();
 
-// Axios instance for Yahoo with a browser-like User-Agent
-const yahooClient = axios.create({
-  baseURL: "https://query1.finance.yahoo.com",
-  headers: {
-    "User-Agent":
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
-  }
-});
-
-
-const cors = require("cors");
+const express = require('express');
+const axios = require('axios');
+const morgan = require('morgan');
+const cors = require('cors');
 
 const app = express();
-
-// Port (Render will inject PORT for you in production)
 const PORT = process.env.PORT || 3000;
 
-// Allow requests from anywhere for now (can be restricted later)
-app.use(cors());
-
-// Simple in-memory cache
-// key: "AAPL,MSFT"  ->  { timestamp: number, data: { [symbol]: { date, close } } }
+// 60 minutes caching to keep API usage tiny
+const CACHE_TTL_MS = 60 * 60 * 1000;
 const cache = new Map();
 
-// 60 minutes cache (as you requested)
-const CACHE_TTL_MS = 60 * 60 * 1000; // 60 minutes
+app.use(morgan('dev'));
+app.use(cors());
 
-function normalizeSymbols(symbolsArray) {
-  return symbolsArray
-    .map((s) => s.trim().toUpperCase())
-    .filter((s) => s.length > 0);
-}
-
-function makeCacheKey(symbolsArray) {
-  return normalizeSymbols(symbolsArray).sort().join(",");
-}
-
-// Fetch quotes from Yahoo Finance (no API key needed)
- async function fetchQuotesFromYahoo(symbols) {
-  const normalizedSymbols = normalizeSymbols(symbols);
-  if (normalizedSymbols.length === 0) {
-    throw new Error("No valid symbols to request from Yahoo");
-  }
-
-  const params = {
-    symbols: normalizedSymbols.join(",")
-  };
-
-  let response;
-  try {
-    // Use the Yahoo client with User-Agent
-    response = await yahooClient.get("/v7/finance/quote", { params });
-  } catch (err) {
-    if (err.response) {
-      console.error(
-        "Yahoo error status:",
-        err.response.status,
-        "data:",
-        JSON.stringify(err.response.data).slice(0, 300)
-      );
-      throw new Error(
-        `Yahoo request failed with status ${err.response.status}`
-      );
-    } else {
-      console.error("Yahoo request error:", err.message);
-      throw new Error(`Yahoo request failed: ${err.message}`);
-    }
-  }
-
-  const data = response.data;
-
-  if (!data || !data.quoteResponse || !Array.isArray(data.quoteResponse.result)) {
-    throw new Error("Unexpected Yahoo Finance response format");
-  }
-
-  const results = data.quoteResponse.result;
-
-  const mapped = {};
-
-  for (const item of results) {
-    const symbol = (item.symbol || "").toUpperCase();
-    if (!symbol) continue;
-
-    const prevClose = item.regularMarketPreviousClose;
-    const timestamp = item.regularMarketTime;
-
-    if (prevClose == null) {
-      continue;
-    }
-
-    const date =
-      timestamp != null
-        ? new Date(timestamp * 1000).toISOString().slice(0, 10)
-        : null;
-
-    mapped[symbol] = {
-      date,
-      close: prevClose
-    };
-  }
-
-  if (Object.keys(mapped).length === 0) {
-    throw new Error("No Yahoo Finance data returned for requested symbols");
-  }
-
-  return mapped;
-}
-
-
-// Health check route
-app.get("/", (req, res) => {
-  res.send("ApexView quotes backend is running (Yahoo Finance)");
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'ApexView quotes backend',
+    provider: 'finnhub',
+    cacheTtlMinutes: CACHE_TTL_MS / 60000
+  });
 });
 
-// Main endpoint: GET /quotes?symbols=AAPL,MSFT
-app.get("/quotes", async (req, res) => {
+app.get('/quotes', async (req, res) => {
   try {
     const symbolsParam = req.query.symbols;
+
     if (!symbolsParam) {
-      return res.status(400).json({ error: "Missing symbols query parameter" });
+      return res.status(400).json({
+        error: 'symbols query parameter is required, e.g. /quotes?symbols=AAPL,MSFT'
+      });
     }
 
-    const symbols = normalizeSymbols(symbolsParam.split(","));
+    const symbols = symbolsParam
+      .split(',')
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean);
+
     if (symbols.length === 0) {
-      return res.status(400).json({ error: "No valid symbols provided" });
+      return res.status(400).json({ error: 'At least one symbol must be provided' });
     }
 
-    const cacheKey = makeCacheKey(symbols);
+    const cacheKey = symbols.join(',');
     const now = Date.now();
-
-    // Check cache
     const cached = cache.get(cacheKey);
+
     if (cached && now - cached.timestamp < CACHE_TTL_MS) {
       return res.json({
-        source: "cache",
+        source: 'cache',
         data: cached.data
       });
     }
 
-    // Fetch fresh data from Yahoo Finance once for all symbols
-    const yahooData = await fetchQuotesFromYahoo(symbols);
+    const liveData = await fetchQuotesFromFinnhub(symbols);
 
-    // Ensure we only return the symbols requested (and in requested order)
-    const responseData = {};
-    for (const sym of symbols) {
-      if (yahooData[sym]) {
-        responseData[sym] = yahooData[sym];
-      }
-    }
-
-    if (Object.keys(responseData).length === 0) {
-      throw new Error("No quotes available for requested symbols");
-    }
-
-    const responseBody = {
-      source: "live",
-      data: responseData
-    };
-
-    // Update cache
     cache.set(cacheKey, {
       timestamp: now,
-      data: responseBody.data
+      data: liveData
     });
 
-    res.json(responseBody);
+    return res.json({
+      source: 'live',
+      data: liveData
+    });
   } catch (err) {
-    console.error("Error in /quotes:", err.message);
+    console.error('Error in /quotes:', err.message);
     res.status(500).json({
-      error: "Failed to fetch quotes",
+      error: 'Failed to fetch quotes',
       message: err.message
     });
   }
 });
 
-// Start server
+async function fetchQuotesFromFinnhub(symbols) {
+  const apiKey = process.env.FINNHUB_API_KEY;
+  if (!apiKey) {
+    throw new Error('FINNHUB_API_KEY is not set');
+  }
+
+  const baseUrl = 'https://finnhub.io/api/v1/quote';
+
+  const results = {};
+
+  const promises = symbols.map(async (symbol) => {
+    const url = `${baseUrl}?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`;
+    const response = await axios.get(url);
+
+    if (response.status !== 200) {
+      throw new Error(`Finnhub request for ${symbol} failed with status ${response.status}`);
+    }
+
+    const q = response.data;
+    // q.pc = previous close, q.c = current price
+    if (!q || typeof q.pc !== 'number') {
+      throw new Error(`Invalid quote data for ${symbol}`);
+    }
+
+    results[symbol] = {
+      symbol,
+      previousClose: q.pc,
+      current: typeof q.c === 'number' ? q.c : null,
+      high: typeof q.h === 'number' ? q.h : null,
+      low: typeof q.l === 'number' ? q.l : null,
+      open: typeof q.o === 'number' ? q.o : null,
+      provider: 'finnhub'
+    };
+  });
+
+  await Promise.all(promises);
+
+  return results;
+}
+
 app.listen(PORT, () => {
-  console.log(`ApexView backend (Yahoo) listening on port ${PORT}`);
+  console.log(`ApexView quotes backend listening on port ${PORT}`);
 });
