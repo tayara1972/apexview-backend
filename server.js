@@ -101,4 +101,55 @@ app.get("/quotes", async (req, res) => {
       return res.status(400).json({ error: "No valid symbols provided" });
     }
 
-    const cacheKey = makeCacheKey(symbol
+    const cacheKey = makeCacheKey(symbols);
+    const now = Date.now();
+
+    // Check cache
+    const cached = cache.get(cacheKey);
+    if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+      return res.json({
+        source: "cache",
+        data: cached.data
+      });
+    }
+
+    // Fetch fresh data from Yahoo Finance once for all symbols
+    const yahooData = await fetchQuotesFromYahoo(symbols);
+
+    // Ensure we only return the symbols requested (and in requested order)
+    const responseData = {};
+    for (const sym of symbols) {
+      if (yahooData[sym]) {
+        responseData[sym] = yahooData[sym];
+      }
+    }
+
+    if (Object.keys(responseData).length === 0) {
+      throw new Error("No quotes available for requested symbols");
+    }
+
+    const responseBody = {
+      source: "live",
+      data: responseData
+    };
+
+    // Update cache
+    cache.set(cacheKey, {
+      timestamp: now,
+      data: responseBody.data
+    });
+
+    res.json(responseBody);
+  } catch (err) {
+    console.error("Error in /quotes:", err.message);
+    res.status(500).json({
+      error: "Failed to fetch quotes",
+      message: err.message
+    });
+  }
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`ApexView backend (Yahoo) listening on port ${PORT}`);
+});
