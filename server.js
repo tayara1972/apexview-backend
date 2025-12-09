@@ -1,6 +1,17 @@
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
+
+// Axios instance for Yahoo with a browser-like User-Agent
+const yahooClient = axios.create({
+  baseURL: "https://query1.finance.yahoo.com",
+  headers: {
+    "User-Agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+  }
+});
+
+
 const cors = require("cors");
 
 const app = express();
@@ -29,9 +40,7 @@ function makeCacheKey(symbolsArray) {
 }
 
 // Fetch quotes from Yahoo Finance (no API key needed)
-async function fetchQuotesFromYahoo(symbols) {
-  const url = "https://query1.finance.yahoo.com/v7/finance/quote";
-
+ async function fetchQuotesFromYahoo(symbols) {
   const normalizedSymbols = normalizeSymbols(symbols);
   if (normalizedSymbols.length === 0) {
     throw new Error("No valid symbols to request from Yahoo");
@@ -41,7 +50,27 @@ async function fetchQuotesFromYahoo(symbols) {
     symbols: normalizedSymbols.join(",")
   };
 
-  const response = await axios.get(url, { params });
+  let response;
+  try {
+    // Use the Yahoo client with User-Agent
+    response = await yahooClient.get("/v7/finance/quote", { params });
+  } catch (err) {
+    if (err.response) {
+      console.error(
+        "Yahoo error status:",
+        err.response.status,
+        "data:",
+        JSON.stringify(err.response.data).slice(0, 300)
+      );
+      throw new Error(
+        `Yahoo request failed with status ${err.response.status}`
+      );
+    } else {
+      console.error("Yahoo request error:", err.message);
+      throw new Error(`Yahoo request failed: ${err.message}`);
+    }
+  }
+
   const data = response.data;
 
   if (!data || !data.quoteResponse || !Array.isArray(data.quoteResponse.result)) {
@@ -50,7 +79,6 @@ async function fetchQuotesFromYahoo(symbols) {
 
   const results = data.quoteResponse.result;
 
-  // Map results by symbol
   const mapped = {};
 
   for (const item of results) {
@@ -58,10 +86,9 @@ async function fetchQuotesFromYahoo(symbols) {
     if (!symbol) continue;
 
     const prevClose = item.regularMarketPreviousClose;
-    const timestamp = item.regularMarketTime; // Unix seconds
+    const timestamp = item.regularMarketTime;
 
     if (prevClose == null) {
-      // If there is no previous close, skip this symbol
       continue;
     }
 
@@ -82,6 +109,7 @@ async function fetchQuotesFromYahoo(symbols) {
 
   return mapped;
 }
+
 
 // Health check route
 app.get("/", (req, res) => {
