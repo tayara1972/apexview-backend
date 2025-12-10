@@ -14,10 +14,6 @@ const cache = new Map();
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 
-// Alpha Vantage key for FX
-const ALPHA_FX_KEY = process.env.ALPHA_FX_KEY || process.env.ALPHA_VANTAGE_KEY;
-
-
 if (!FINNHUB_API_KEY) {
   console.warn('WARNING: FINNHUB_API_KEY is not set. Quotes/FX will fail.');
 }
@@ -25,7 +21,7 @@ if (!FINNHUB_API_KEY) {
 app.use(morgan('dev'));
 app.use(cors());
 
-// Simple health check / info
+// Health check
 app.get('/', (req, res) => {
   res.json({
     status: 'ok',
@@ -35,161 +31,80 @@ app.get('/', (req, res) => {
   });
 });
 
-// Simple FX endpoint, used by the iOS app for net-worth conversion
-// GET /fx?from=EUR&to=USD
-app.get('/fx', async (req, res) => {
-  const from = (req.query.from || '').toUpperCase().trim();
-  const to   = (req.query.to || '').toUpperCase().trim();
-
-  if (!from || !to) {
-    return res.status(400).json({ error: 'from and to query params are required' });
-  }
-
-  if (!ALPHA_FX_KEY) {
-    return res.status(500).json({ error: 'ALPHA_FX_KEY is not configured on the server' });
-  }
-
-  // Same currency, rate is 1
-  if (from === to) {
-    return res.json({
-      fromCurrency: from,
-      toCurrency: to,
-      rate: 1,
-      lastUpdated: new Date().toISOString()
-    });
-  }
-
-  const url =
-    'https://www.alphavantage.co/query' +
-    '?function=CURRENCY_EXCHANGE_RATE' +
-    `&from_currency=${encodeURIComponent(from)}` +
-    `&to_currency=${encodeURIComponent(to)}` +
-    `&apikey=${ALPHA_FX_KEY}`;
-
-  try {
-    const resp = await axios.get(url);
-
-    const payload = resp.data['Realtime Currency Exchange Rate'];
-    if (!payload || !payload['5. Exchange Rate']) {
-      throw new Error('Bad FX response from Alpha Vantage');
-    }
-
-    const rate = parseFloat(payload['5. Exchange Rate']);
-    if (!Number.isFinite(rate)) {
-      throw new Error('FX rate is not a number');
-    }
-
-    res.json({
-      fromCurrency: payload['1. From_Currency Code'],
-      toCurrency:   payload['3. To_Currency Code'],
-      rate,
-      lastUpdated:  payload['6. Last Refreshed']
-    });
-  } catch (err) {
-    console.error('Error in /fx:', err);
-    res.status(500).json({
-      error: 'Failed to fetch FX',
-      message: String(err)
-    });
-  }
-});
-
-
 /**
  * Map your app symbols to Finnhub symbols.
  * - Stocks/ETFs: pass through (AAPL, MSFT, TSLA, etc)
- * - Crypto: map to BINANCE *USDT pairs (approx USD)
- *
- * We cover ~top 20 major coins.
+ * - Crypto: map to BINANCE USDT pairs (approx USD)
  */
 function mapToFinnhubSymbol(raw) {
   const s = raw.toUpperCase().trim();
-
-  // Helper for common pattern
   const binance = suffix => `BINANCE:${suffix}`;
 
   switch (s) {
-    // Bitcoin
     case 'BTC':
     case 'BTC-USD':
       return binance('BTCUSDT');
 
-    // Ethereum
     case 'ETH':
     case 'ETH-USD':
       return binance('ETHUSDT');
 
-    // Binance Coin
     case 'BNB':
     case 'BNB-USD':
       return binance('BNBUSDT');
 
-    // Solana
     case 'SOL':
     case 'SOL-USD':
       return binance('SOLUSDT');
 
-    // XRP
     case 'XRP':
     case 'XRP-USD':
       return binance('XRPUSDT');
 
-    // Cardano
     case 'ADA':
     case 'ADA-USD':
       return binance('ADAUSDT');
 
-    // Avalanche
     case 'AVAX':
     case 'AVAX-USD':
       return binance('AVAXUSDT');
 
-    // Dogecoin
     case 'DOGE':
     case 'DOGE-USD':
       return binance('DOGEUSDT');
 
-    // Polygon
     case 'MATIC':
     case 'MATIC-USD':
       return binance('MATICUSDT');
 
-    // Polkadot
     case 'DOT':
     case 'DOT-USD':
       return binance('DOTUSDT');
 
-    // Litecoin
     case 'LTC':
     case 'LTC-USD':
       return binance('LTCUSDT');
 
-    // Chainlink
     case 'LINK':
     case 'LINK-USD':
       return binance('LINKUSDT');
 
-    // Bitcoin Cash
     case 'BCH':
     case 'BCH-USD':
       return binance('BCHUSDT');
 
-    // Shiba Inu
     case 'SHIB':
     case 'SHIB-USD':
       return binance('SHIBUSDT');
 
-    // Uniswap
     case 'UNI':
     case 'UNI-USD':
       return binance('UNIUSDT');
 
-    // Toncoin
     case 'TON':
     case 'TON-USD':
       return binance('TONUSDT');
 
-    // Render/Injective/other majors – examples
     case 'INJ':
     case 'INJ-USD':
       return binance('INJUSDT');
@@ -202,16 +117,14 @@ function mapToFinnhubSymbol(raw) {
     case 'ARB-USD':
       return binance('ARBUSDT');
 
-    // If not one of the mapped cryptos, treat as stock/ETF ticker
     default:
+      // Treat as stock/ETF
       return s;
   }
 }
 
 /**
- * Simple symbol validation:
- * - Uppercase letters, digits, dash, dot
- * - Max 20 chars
+ * Simple symbol validation.
  */
 function isValidSymbol(sym) {
   return /^[A-Z0-9.\-]{1,20}$/.test(sym);
@@ -219,16 +132,6 @@ function isValidSymbol(sym) {
 
 /**
  * GET /quotes?symbols=AAPL,BTC-USD,ETH-USD
- *
- * Returns:
- *  {
- *    "source": "live",
- *    "data": {
- *      "AAPL":    { ... },
- *      "BTC-USD": { ... },
- *      "ETH-USD": { ... }
- *    }
- *  }
  */
 app.get('/quotes', async (req, res) => {
   const symbolsParam = req.query.symbols;
@@ -237,16 +140,13 @@ app.get('/quotes', async (req, res) => {
     return res.status(400).json({ error: 'symbols query param is required' });
   }
 
-  // Parse, clean, uppercase
   let rawSymbols = symbolsParam
     .split(',')
     .map(s => s.trim().toUpperCase())
     .filter(Boolean);
 
-  // Deduplicate
-  rawSymbols = Array.from(new Set(rawSymbols));
+  rawSymbols = Array.from(new Set(rawSymbols)); // dedupe
 
-  // Hard cap to avoid abuse
   const MAX_SYMBOLS = 100;
   if (rawSymbols.length === 0) {
     return res.status(400).json({ error: 'No valid symbols provided' });
@@ -257,7 +157,6 @@ app.get('/quotes', async (req, res) => {
     });
   }
 
-  // Validate symbol format
   const invalidSymbols = rawSymbols.filter(s => !isValidSymbol(s));
   if (invalidSymbols.length > 0) {
     return res.status(400).json({
@@ -272,7 +171,6 @@ app.get('/quotes', async (req, res) => {
     });
   }
 
-  // Pair original symbol with its Finnhub symbol
   const pairs = rawSymbols.map(raw => ({
     raw,
     finnhub: mapToFinnhubSymbol(raw)
@@ -287,16 +185,11 @@ app.get('/quotes', async (req, res) => {
         const cacheKey = `quote:${finnhub}`;
         const cached = cache.get(cacheKey);
 
-        // Cache hit
         if (cached && now - cached.timestamp < CACHE_TTL_MS) {
-          result[raw] = {
-            ...cached.value,
-            symbol: raw
-          };
+          result[raw] = { ...cached.value, symbol: raw };
           return;
         }
 
-        // Cache miss, call Finnhub
         try {
           const url =
             'https://finnhub.io/api/v1/quote?symbol=' +
@@ -322,11 +215,7 @@ app.get('/quotes', async (req, res) => {
             provider: 'finnhub'
           };
 
-          cache.set(cacheKey, {
-            timestamp: now,
-            value
-          });
-
+          cache.set(cacheKey, { timestamp: now, value });
           result[raw] = value;
         } catch (innerErr) {
           console.error(
@@ -365,15 +254,7 @@ app.get('/quotes', async (req, res) => {
 
 /**
  * GET /fx?from=EUR&to=USD
- *
- * Uses Finnhub forex rates with base=USD.
- * Response:
- * {
- *   "from": "EUR",
- *   "to": "USD",
- *   "rate": 1.0834,
- *   "provider": "finnhub"
- * }
+ * Uses Finnhub forex rates with base = USD.
  */
 app.get('/fx', async (req, res) => {
   let { from, to } = req.query;
@@ -436,7 +317,6 @@ app.get('/fx', async (req, res) => {
       });
     }
 
-    // baseRates: e.g. { "EUR": 0.91, "GBP": 0.78, ... } vs USD
     const rateFromBase = (code) => {
       if (code === BASE) return 1.0;
       const v = baseRates[code];
@@ -453,9 +333,6 @@ app.get('/fx', async (req, res) => {
       });
     }
 
-    // Cross rate: from -> to, both quoted vs BASE
-    // Example: BASE=USD, from=EUR (0.91), to=GBP (0.78)
-    // 1 EUR = (GBP/USD) / (EUR/USD) = 0.78 / 0.91
     const rate = rTo / rFrom;
 
     return res.json({
