@@ -26,6 +26,8 @@ app.get('/', (req, res) => {
 
 // server.js
 
+const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
+
 app.get('/quotes', async (req, res) => {
   const symbolsParam = req.query.symbols;
   if (!symbolsParam) {
@@ -41,63 +43,70 @@ app.get('/quotes', async (req, res) => {
     return res.status(400).json({ error: 'No valid symbols provided' });
   }
 
-  const yahooUrl =
-    'https://query1.finance.yahoo.com/v7/finance/quote?symbols=' +
-    encodeURIComponent(symbols.join(','));
+  if (!FINNHUB_API_KEY) {
+    return res.status(500).json({
+      error: 'Missing FINNHUB_API_KEY',
+      message: 'Set FINNHUB_API_KEY in your environment',
+    });
+  }
+
+  const data = {};
 
   try {
-    const yahooResp = await fetch(yahooUrl);
-    if (!yahooResp.ok) {
-      throw new Error(`Yahoo status ${yahooResp.status}`);
-    }
+    for (const symbol of symbols) {
+      const url =
+        'https://finnhub.io/api/v1/quote?symbol=' +
+        encodeURIComponent(symbol) +
+        '&token=' +
+        encodeURIComponent(FINNHUB_API_KEY);
 
-    const json = await yahooResp.json();
-    const list = (json.quoteResponse && json.quoteResponse.result) || [];
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        console.error('Finnhub quote error', symbol, resp.status, await resp.text());
+        continue;
+      }
 
-    const result = {};
+      const q = await resp.json();
 
-    for (const q of list) {
-      const sym = (q.symbol || '').toUpperCase();
-      if (!sym) continue;
-
-      result[sym] = {
-        symbol: sym,
-        previousClose: q.regularMarketPreviousClose ?? null,
-        current:       q.regularMarketPrice        ?? null,
-        high:          q.regularMarketDayHigh      ?? null,
-        low:           q.regularMarketDayLow       ?? null,
-        open:          q.regularMarketOpen         ?? null,
-        provider: 'yahoo'
+      data[symbol] = {
+        symbol,
+        previousClose: q.pc ?? null,
+        current:       q.c  ?? null,
+        high:          q.h  ?? null,
+        low:           q.l  ?? null,
+        open:          q.o  ?? null,
+        provider: 'finnhub',
       };
     }
 
     // Ensure every requested symbol has an entry
     for (const s of symbols) {
-      if (!result[s]) {
-        result[s] = {
+      if (!data[s]) {
+        data[s] = {
           symbol: s,
           previousClose: null,
           current: null,
           high: null,
           low: null,
           open: null,
-          provider: 'yahoo'
+          provider: 'finnhub',
         };
       }
     }
 
     res.json({
       source: 'live',
-      data: result
+      data,
     });
   } catch (err) {
     console.error('Error in /quotes:', err);
     res.status(500).json({
       error: 'Failed to fetch quotes',
-      message: String(err)
+      message: String(err),
     });
   }
 });
+
 
 
 async function fetchQuotesFromFinnhub(symbols) {
