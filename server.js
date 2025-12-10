@@ -14,6 +14,10 @@ const cache = new Map();
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 
+// Alpha Vantage key for FX
+const ALPHA_FX_KEY = process.env.ALPHA_FX_KEY || process.env.ALPHA_VANTAGE_KEY;
+
+
 if (!FINNHUB_API_KEY) {
   console.warn('WARNING: FINNHUB_API_KEY is not set. Quotes/FX will fail.');
 }
@@ -30,6 +34,66 @@ app.get('/', (req, res) => {
     cacheTtlMinutes: CACHE_TTL_MS / 60000
   });
 });
+
+// Simple FX endpoint, used by the iOS app for net-worth conversion
+// GET /fx?from=EUR&to=USD
+app.get('/fx', async (req, res) => {
+  const from = (req.query.from || '').toUpperCase().trim();
+  const to   = (req.query.to || '').toUpperCase().trim();
+
+  if (!from || !to) {
+    return res.status(400).json({ error: 'from and to query params are required' });
+  }
+
+  if (!ALPHA_FX_KEY) {
+    return res.status(500).json({ error: 'ALPHA_FX_KEY is not configured on the server' });
+  }
+
+  // Same currency, rate is 1
+  if (from === to) {
+    return res.json({
+      fromCurrency: from,
+      toCurrency: to,
+      rate: 1,
+      lastUpdated: new Date().toISOString()
+    });
+  }
+
+  const url =
+    'https://www.alphavantage.co/query' +
+    '?function=CURRENCY_EXCHANGE_RATE' +
+    `&from_currency=${encodeURIComponent(from)}` +
+    `&to_currency=${encodeURIComponent(to)}` +
+    `&apikey=${ALPHA_FX_KEY}`;
+
+  try {
+    const resp = await axios.get(url);
+
+    const payload = resp.data['Realtime Currency Exchange Rate'];
+    if (!payload || !payload['5. Exchange Rate']) {
+      throw new Error('Bad FX response from Alpha Vantage');
+    }
+
+    const rate = parseFloat(payload['5. Exchange Rate']);
+    if (!Number.isFinite(rate)) {
+      throw new Error('FX rate is not a number');
+    }
+
+    res.json({
+      fromCurrency: payload['1. From_Currency Code'],
+      toCurrency:   payload['3. To_Currency Code'],
+      rate,
+      lastUpdated:  payload['6. Last Refreshed']
+    });
+  } catch (err) {
+    console.error('Error in /fx:', err);
+    res.status(500).json({
+      error: 'Failed to fetch FX',
+      message: String(err)
+    });
+  }
+});
+
 
 /**
  * Map your app symbols to Finnhub symbols.
