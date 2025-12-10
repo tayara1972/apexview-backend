@@ -12,127 +12,166 @@ const PORT = process.env.PORT || 3000;
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const cache = new Map();
 
+// Finnhub for quotes (stocks + crypto)
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 
+// Alpha Vantage key for FX (server-side net-worth conversion)
+const ALPHA_FX_KEY = process.env.ALPHA_FX_KEY || process.env.ALPHA_VANTAGE_KEY;
+
 if (!FINNHUB_API_KEY) {
-  console.warn('WARNING: FINNHUB_API_KEY is not set. Quotes/FX will fail.');
+  console.warn('WARNING: FINNHUB_API_KEY is not set. /quotes will fail.');
+}
+if (!ALPHA_FX_KEY) {
+  console.warn('WARNING: ALPHA_FX_KEY (or ALPHA_VANTAGE_KEY) is not set. /fx will fail.');
 }
 
 app.use(morgan('dev'));
 app.use(cors());
 
+// -----------------------------------------------------------------------------
 // Health check
+// -----------------------------------------------------------------------------
 app.get('/', (req, res) => {
   res.json({
     status: 'ok',
     service: 'ApexView quotes backend',
-    provider: 'finnhub',
+    providers: {
+      quotes: 'finnhub',
+      fx: ALPHA_FX_KEY ? 'alphavantage' : 'none'
+    },
     cacheTtlMinutes: CACHE_TTL_MS / 60000
   });
 });
 
-/**
- * Map your app symbols to Finnhub symbols.
- * - Stocks/ETFs: pass through (AAPL, MSFT, TSLA, etc)
- * - Crypto: map to BINANCE USDT pairs (approx USD)
- */
+// -----------------------------------------------------------------------------
+// Symbol mapping: app symbols -> Finnhub symbols
+// Stocks/ETFs: pass through (AAPL, MSFT, TSLA, etc)
+// Crypto: map to BINANCE *USDT pairs (approx USD)
+// This covers ~top 20 coins.
+// -----------------------------------------------------------------------------
 function mapToFinnhubSymbol(raw) {
   const s = raw.toUpperCase().trim();
   const binance = suffix => `BINANCE:${suffix}`;
 
   switch (s) {
+    // Bitcoin
     case 'BTC':
     case 'BTC-USD':
       return binance('BTCUSDT');
 
+    // Ethereum
     case 'ETH':
     case 'ETH-USD':
       return binance('ETHUSDT');
 
+    // Binance Coin
     case 'BNB':
     case 'BNB-USD':
       return binance('BNBUSDT');
 
+    // Solana
     case 'SOL':
     case 'SOL-USD':
       return binance('SOLUSDT');
 
+    // XRP
     case 'XRP':
     case 'XRP-USD':
       return binance('XRPUSDT');
 
+    // Cardano
     case 'ADA':
     case 'ADA-USD':
       return binance('ADAUSDT');
 
+    // Avalanche
     case 'AVAX':
     case 'AVAX-USD':
       return binance('AVAXUSDT');
 
+    // Dogecoin
     case 'DOGE':
     case 'DOGE-USD':
       return binance('DOGEUSDT');
 
+    // Polygon
     case 'MATIC':
     case 'MATIC-USD':
       return binance('MATICUSDT');
 
+    // Polkadot
     case 'DOT':
     case 'DOT-USD':
       return binance('DOTUSDT');
 
+    // Litecoin
     case 'LTC':
     case 'LTC-USD':
       return binance('LTCUSDT');
 
+    // Chainlink
     case 'LINK':
     case 'LINK-USD':
       return binance('LINKUSDT');
 
+    // Bitcoin Cash
     case 'BCH':
     case 'BCH-USD':
       return binance('BCHUSDT');
 
+    // Shiba Inu
     case 'SHIB':
     case 'SHIB-USD':
       return binance('SHIBUSDT');
 
+    // Uniswap
     case 'UNI':
     case 'UNI-USD':
       return binance('UNIUSDT');
 
+    // Toncoin
     case 'TON':
     case 'TON-USD':
       return binance('TONUSDT');
 
+    // Injective
     case 'INJ':
     case 'INJ-USD':
       return binance('INJUSDT');
 
+    // Optimism
     case 'OP':
     case 'OP-USD':
       return binance('OPUSDT');
 
+    // Arbitrum
     case 'ARB':
     case 'ARB-USD':
       return binance('ARBUSDT');
 
     default:
-      // Treat as stock/ETF
+      // Treat as stock/ETF (AAPL, MSFT, TSLA, etc)
       return s;
   }
 }
 
-/**
- * Simple symbol validation.
- */
+// Simple symbol validation
 function isValidSymbol(sym) {
   return /^[A-Z0-9.\-]{1,20}$/.test(sym);
 }
 
-/**
- * GET /quotes?symbols=AAPL,BTC-USD,ETH-USD
- */
+// -----------------------------------------------------------------------------
+// GET /quotes?symbols=AAPL,BTC-USD,ETH-USD
+// Returns:
+// {
+//   "source": "live",
+//   "data": {
+//     "AAPL":    { ... },
+//     "BTC-USD": { ... },
+//     "ETH-USD": { ... }
+//   }
+// }
+// -----------------------------------------------------------------------------
 app.get('/quotes', async (req, res) => {
   const symbolsParam = req.query.symbols;
 
@@ -145,7 +184,8 @@ app.get('/quotes', async (req, res) => {
     .map(s => s.trim().toUpperCase())
     .filter(Boolean);
 
-  rawSymbols = Array.from(new Set(rawSymbols)); // dedupe
+  // Deduplicate
+  rawSymbols = Array.from(new Set(rawSymbols));
 
   const MAX_SYMBOLS = 100;
   if (rawSymbols.length === 0) {
@@ -185,11 +225,13 @@ app.get('/quotes', async (req, res) => {
         const cacheKey = `quote:${finnhub}`;
         const cached = cache.get(cacheKey);
 
+        // Cache hit
         if (cached && now - cached.timestamp < CACHE_TTL_MS) {
           result[raw] = { ...cached.value, symbol: raw };
           return;
         }
 
+        // Cache miss
         try {
           const url =
             'https://finnhub.io/api/v1/quote?symbol=' +
@@ -252,40 +294,34 @@ app.get('/quotes', async (req, res) => {
   }
 });
 
-/**
- * GET /fx?from=EUR&to=USD
- * Uses Finnhub forex rates with base = USD.
- */
-a// Alpha Vantage key for FX (keep this near the top of the file)
-const ALPHA_FX_KEY = process.env.ALPHA_FX_KEY || process.env.ALPHA_VANTAGE_KEY;
-
-/**
- * GET /fx?from=EUR&to=USD
- *
- * Uses Alpha Vantage CURRENCY_EXCHANGE_RATE
- * and caches results for 60 minutes.
- */
+// -----------------------------------------------------------------------------
+// GET /fx?from=EUR&to=USD
+// Uses Alpha Vantage CURRENCY_EXCHANGE_RATE, with caching.
+// JSON shape is friendly for your iOS FX decoding.
+// -----------------------------------------------------------------------------
 app.get('/fx', async (req, res) => {
-  let { from, to } = req.query;
-
-  from = String(from || '').toUpperCase().trim();
-  to   = String(to   || '').toUpperCase().trim();
+  const from = (req.query.from || '').toUpperCase().trim();
+  const to   = (req.query.to   || '').toUpperCase().trim();
 
   if (!from || !to) {
-    return res.status(400).json({ error: 'from and to query params are required' });
-  }
-
-  if (!ALPHA_FX_KEY) {
-    return res.status(500).json({ error: 'ALPHA_FX_KEY is not configured on the server' });
+    return res.status(400).json({
+      error: 'from and to query params are required'
+    });
   }
 
   if (from === to) {
     return res.json({
       fromCurrency: from,
       toCurrency: to,
-      rate: 1,
-      lastUpdated: new Date().toISOString(),
-      provider: 'alpha_vantage'
+      rate: 1.0,
+      provider: 'alphavantage',
+      lastUpdated: new Date().toISOString()
+    });
+  }
+
+  if (!ALPHA_FX_KEY) {
+    return res.status(500).json({
+      error: 'ALPHA_FX_KEY (or ALPHA_VANTAGE_KEY) is not configured on the server'
     });
   }
 
@@ -305,8 +341,14 @@ app.get('/fx', async (req, res) => {
     `&apikey=${ALPHA_FX_KEY}`;
 
   try {
-    const resp = await axios.get(url);
-    const payload = resp.data['Realtime Currency Exchange Rate'];
+    const response = await axios.get(url);
+
+    if (response.status !== 200) {
+      throw new Error('Alpha Vantage FX status ' + response.status);
+    }
+
+    const data = response.data || {};
+    const payload = data['Realtime Currency Exchange Rate'];
 
     if (!payload || !payload['5. Exchange Rate']) {
       throw new Error('Bad FX response from Alpha Vantage');
@@ -317,29 +359,29 @@ app.get('/fx', async (req, res) => {
       throw new Error('FX rate is not a number');
     }
 
-    const body = {
+    const fxObj = {
       fromCurrency: payload['1. From_Currency Code'],
       toCurrency:   payload['3. To_Currency Code'],
       rate,
-      lastUpdated:  payload['6. Last Refreshed'],
-      provider:     'alpha_vantage'
+      provider: 'alphavantage',
+      lastUpdated: payload['6. Last Refreshed']
     };
 
-    cache.set(cacheKey, { timestamp: now, value: body });
+    cache.set(cacheKey, {
+      timestamp: now,
+      value: fxObj
+    });
 
-    res.json(body);
+    return res.json(fxObj);
   } catch (err) {
     console.error('Error in /fx:', err);
-    res.status(500).json({
-      error: 'Failed to fetch FX',
+    return res.status(500).json({
+      error: 'Failed to fetch FX rate',
       message: String(err)
     });
   }
 });
 
-
 app.listen(PORT, () => {
   console.log(`ApexView quotes backend listening on port ${PORT}`);
 });
-
-
