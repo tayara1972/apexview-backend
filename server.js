@@ -256,99 +256,87 @@ app.get('/quotes', async (req, res) => {
  * GET /fx?from=EUR&to=USD
  * Uses Finnhub forex rates with base = USD.
  */
+a// Alpha Vantage key for FX (keep this near the top of the file)
+const ALPHA_FX_KEY = process.env.ALPHA_FX_KEY || process.env.ALPHA_VANTAGE_KEY;
+
+/**
+ * GET /fx?from=EUR&to=USD
+ *
+ * Uses Alpha Vantage CURRENCY_EXCHANGE_RATE
+ * and caches results for 60 minutes.
+ */
 app.get('/fx', async (req, res) => {
   let { from, to } = req.query;
 
+  from = String(from || '').toUpperCase().trim();
+  to   = String(to   || '').toUpperCase().trim();
+
   if (!from || !to) {
-    return res.status(400).json({
-      error: 'from and to query params are required'
-    });
+    return res.status(400).json({ error: 'from and to query params are required' });
   }
 
-  from = String(from).toUpperCase().trim();
-  to   = String(to).toUpperCase().trim();
+  if (!ALPHA_FX_KEY) {
+    return res.status(500).json({ error: 'ALPHA_FX_KEY is not configured on the server' });
+  }
 
   if (from === to) {
     return res.json({
-      from,
-      to,
-      rate: 1.0,
-      provider: 'finnhub'
+      fromCurrency: from,
+      toCurrency: to,
+      rate: 1,
+      lastUpdated: new Date().toISOString(),
+      provider: 'alpha_vantage'
     });
   }
 
-  if (!FINNHUB_API_KEY) {
-    return res.status(500).json({
-      error: 'FINNHUB_API_KEY is not configured on the server'
-    });
+  const cacheKey = `fx:${from}->${to}`;
+  const cached = cache.get(cacheKey);
+  const now = Date.now();
+
+  if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+    return res.json(cached.value);
   }
 
-  const BASE = 'USD';
+  const url =
+    'https://www.alphavantage.co/query' +
+    '?function=CURRENCY_EXCHANGE_RATE' +
+    `&from_currency=${encodeURIComponent(from)}` +
+    `&to_currency=${encodeURIComponent(to)}` +
+    `&apikey=${ALPHA_FX_KEY}`;
 
   try {
-    const cacheKey = `fx:${BASE}`;
-    const now = Date.now();
+    const resp = await axios.get(url);
+    const payload = resp.data['Realtime Currency Exchange Rate'];
 
-    let baseRates = null;
-
-    const cached = cache.get(cacheKey);
-    if (cached && now - cached.timestamp < CACHE_TTL_MS) {
-      baseRates = cached.value;
-    } else {
-      const url =
-        'https://finnhub.io/api/v1/forex/rates?base=' +
-        encodeURIComponent(BASE) +
-        '&token=' +
-        FINNHUB_API_KEY;
-
-      const response = await axios.get(url);
-
-      if (response.status !== 200) {
-        throw new Error('Finnhub FX status ' + response.status);
-      }
-
-      const data = response.data || {};
-      const quotes = data.quote || {};
-
-      baseRates = quotes;
-      cache.set(cacheKey, {
-        timestamp: now,
-        value: baseRates
-      });
+    if (!payload || !payload['5. Exchange Rate']) {
+      throw new Error('Bad FX response from Alpha Vantage');
     }
 
-    const rateFromBase = (code) => {
-      if (code === BASE) return 1.0;
-      const v = baseRates[code];
-      return typeof v === 'number' ? v : null;
+    const rate = parseFloat(payload['5. Exchange Rate']);
+    if (!Number.isFinite(rate)) {
+      throw new Error('FX rate is not a number');
+    }
+
+    const body = {
+      fromCurrency: payload['1. From_Currency Code'],
+      toCurrency:   payload['3. To_Currency Code'],
+      rate,
+      lastUpdated:  payload['6. Last Refreshed'],
+      provider:     'alpha_vantage'
     };
 
-    const rFrom = rateFromBase(from);
-    const rTo   = rateFromBase(to);
+    cache.set(cacheKey, { timestamp: now, value: body });
 
-    if (rFrom == null || rTo == null) {
-      return res.status(400).json({
-        error: 'Unsupported currency code',
-        details: { from, to }
-      });
-    }
-
-    const rate = rTo / rFrom;
-
-    return res.json({
-      from,
-      to,
-      rate,
-      provider: 'finnhub'
-    });
+    res.json(body);
   } catch (err) {
     console.error('Error in /fx:', err);
-    return res.status(500).json({
-      error: 'Failed to fetch FX rate',
+    res.status(500).json({
+      error: 'Failed to fetch FX',
       message: String(err)
     });
   }
 });
+
 
 app.listen(PORT, () => {
   console.log(`ApexView quotes backend listening on port ${PORT}`);
