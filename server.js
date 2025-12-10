@@ -28,84 +28,119 @@ app.get('/', (req, res) => {
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 
+function mapToFinnhubSymbol(raw) {
+  const s = raw.toUpperCase().trim();
+
+  // BTC and ETH shortcuts. You can extend this later.
+
+  if (s === 'BTC' || s === 'BTC-USD') {
+    // Coinbase BTC-USD pair
+    return 'COINBASE:BTC-USD';
+  }
+
+  if (s === 'ETH' || s === 'ETH-USD') {
+    // Coinbase ETH-USD pair
+    return 'COINBASE:ETH-USD';
+  }
+
+  if (s === 'SOL' || s === 'SOL-USD') {
+    return 'COINBASE:SOL-USD';
+  }
+
+  if (s === 'ADA' || s === 'ADA-USD') {
+    return 'COINBASE:ADA-USD';
+  }
+
+  if (s === 'DOGE' || s === 'DOGE-USD') {
+    return 'COINBASE:DOGE-USD';
+  }
+
+  // Everything else is treated as a regular stock or ETF ticker.
+  // For example AAPL, MSFT, TSLA work directly with Finnhub stocks.
+  return s;
+}
+
+
 app.get('/quotes', async (req, res) => {
   const symbolsParam = req.query.symbols;
+
   if (!symbolsParam) {
     return res.status(400).json({ error: 'symbols query param is required' });
   }
 
-  const symbols = symbolsParam
+  const rawSymbols = symbolsParam
     .split(',')
     .map(s => s.trim().toUpperCase())
     .filter(Boolean);
 
-  if (symbols.length === 0) {
+  if (rawSymbols.length === 0) {
     return res.status(400).json({ error: 'No valid symbols provided' });
   }
 
-  if (!FINNHUB_API_KEY) {
-    return res.status(500).json({
-      error: 'Missing FINNHUB_API_KEY',
-      message: 'Set FINNHUB_API_KEY in your environment',
-    });
-  }
+  // Pair each original symbol with its Finnhub symbol
+  const pairs = rawSymbols.map(raw => ({
+    raw,
+    finnhub: mapToFinnhubSymbol(raw)
+  }));
 
-  const data = {};
+  const result = {};
 
   try {
-    for (const symbol of symbols) {
-      const url =
-        'https://finnhub.io/api/v1/quote?symbol=' +
-        encodeURIComponent(symbol) +
-        '&token=' +
-        encodeURIComponent(FINNHUB_API_KEY);
+    await Promise.all(
+      pairs.map(async ({ raw, finnhub }) => {
+        try {
+          const url =
+            'https://finnhub.io/api/v1/quote?symbol=' +
+            encodeURIComponent(finnhub) +
+            '&token=' +
+            FINNHUB_KEY;
 
-      const resp = await fetch(url);
-      if (!resp.ok) {
-        console.error('Finnhub quote error', symbol, resp.status, await resp.text());
-        continue;
-      }
+          const resp = await fetch(url);
 
-      const q = await resp.json();
+          if (!resp.ok) {
+            throw new Error('Finnhub status ' + resp.status);
+          }
 
-      data[symbol] = {
-        symbol,
-        previousClose: q.pc ?? null,
-        current:       q.c  ?? null,
-        high:          q.h  ?? null,
-        low:           q.l  ?? null,
-        open:          q.o  ?? null,
-        provider: 'finnhub',
-      };
-    }
+          const json = await resp.json();
 
-    // Ensure every requested symbol has an entry
-    for (const s of symbols) {
-      if (!data[s]) {
-        data[s] = {
-          symbol: s,
-          previousClose: null,
-          current: null,
-          high: null,
-          low: null,
-          open: null,
-          provider: 'finnhub',
-        };
-      }
-    }
+          // Finnhub fields: c=current, pc=previous close, h=high, l=low, o=open
+          result[raw] = {
+            symbol: raw,
+            previousClose: json.pc ?? null,
+            current: json.c ?? null,
+            high: json.h ?? null,
+            low: json.l ?? null,
+            open: json.o ?? null,
+            provider: 'finnhub'
+          };
+        } catch (innerErr) {
+          console.error('Error fetching quote for', raw, 'mapped as', finnhub, innerErr);
+          result[raw] = {
+            symbol: raw,
+            previousClose: null,
+            current: null,
+            high: null,
+            low: null,
+            open: null,
+            provider: 'finnhub'
+          };
+        }
+      })
+    );
 
-    res.json({
+    return res.json({
       source: 'live',
-      data,
+      data: result
     });
   } catch (err) {
     console.error('Error in /quotes:', err);
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Failed to fetch quotes',
-      message: String(err),
+      message: String(err)
     });
   }
 });
+
 
 
 
