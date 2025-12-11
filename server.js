@@ -8,6 +8,9 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Environment label for prod vs staging vs local
+const BACKEND_ENV = process.env.BACKEND_ENV || process.env.NODE_ENV || 'development';
+
 // 60 minutes caching to keep API usage tiny
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const cache = new Map();
@@ -35,11 +38,13 @@ app.get('/', (req, res) => {
   res.json({
     status: 'ok',
     service: 'ApexView quotes backend',
+    environment: BACKEND_ENV,
     providers: {
       quotes: 'finnhub',
       fx: ALPHA_FX_KEY ? 'alphavantage' : 'none'
     },
-    cacheTtlMinutes: CACHE_TTL_MS / 60000
+    cacheTtlMinutes: CACHE_TTL_MS / 60000,
+    time: new Date().toISOString()
   });
 });
 
