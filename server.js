@@ -200,28 +200,42 @@ app.get('/quotes', async (req, res) => {
     return res.status(400).json({ error: 'symbols query param is required' });
   }
 
-  let rawSymbols = symbolsParam
+  let requestedSymbols = symbolsParam
     .split(',')
     .map(s => s.trim().toUpperCase())
     .filter(Boolean);
 
   // Deduplicate
-  rawSymbols = Array.from(new Set(rawSymbols));
+  requestedSymbols = Array.from(new Set(requestedSymbols));
 
   const MAX_SYMBOLS = 100;
-  if (rawSymbols.length === 0) {
-    return res.status(400).json({ error: 'No valid symbols provided' });
+
+  if (requestedSymbols.length === 0) {
+    return res.status(400).json({ error: 'No symbols provided' });
   }
-  if (rawSymbols.length > MAX_SYMBOLS) {
+
+  if (requestedSymbols.length > MAX_SYMBOLS) {
     return res.status(400).json({
       error: `Too many symbols. Max allowed is ${MAX_SYMBOLS}.`
     });
   }
 
-  const invalidSymbols = rawSymbols.filter(s => !isValidSymbol(s));
-  if (invalidSymbols.length > 0) {
+  // Separate valid and invalid symbols
+  const validSymbols = [];
+  const invalidSymbols = [];
+
+  for (const sym of requestedSymbols) {
+    if (isValidSymbol(sym)) {
+      validSymbols.push(sym);
+    } else {
+      invalidSymbols.push(sym);
+    }
+  }
+
+  // If nothing is valid, fail with a clear message
+  if (validSymbols.length === 0) {
     return res.status(400).json({
-      error: 'Invalid symbol format',
+      error: 'No valid symbols after validation',
       invalidSymbols
     });
   }
@@ -232,7 +246,7 @@ app.get('/quotes', async (req, res) => {
     });
   }
 
-  const pairs = rawSymbols.map(raw => ({
+  const pairs = validSymbols.map(raw => ({
     raw,
     finnhub: mapToFinnhubSymbol(raw)
   }));
@@ -304,7 +318,9 @@ app.get('/quotes', async (req, res) => {
 
     return res.json({
       source: 'live',
-      data: result
+      environment: BACKEND_ENV,
+      data: result,
+      invalidSymbols: invalidSymbols.length > 0 ? invalidSymbols : undefined
     });
   } catch (err) {
     console.error('Error in /quotes:', err);
@@ -315,93 +331,6 @@ app.get('/quotes', async (req, res) => {
   }
 });
 
-// -----------------------------------------------------------------------------
-// GET /fx?from=EUR&to=USD
-// Uses Alpha Vantage CURRENCY_EXCHANGE_RATE, with caching.
-// JSON shape is friendly for your iOS FX decoding.
-// -----------------------------------------------------------------------------
-app.get('/fx', async (req, res) => {
-  const from = (req.query.from || '').toUpperCase().trim();
-  const to   = (req.query.to   || '').toUpperCase().trim();
-
-  if (!from || !to) {
-    return res.status(400).json({
-      error: 'from and to query params are required'
-    });
-  }
-
-  if (from === to) {
-    return res.json({
-      fromCurrency: from,
-      toCurrency: to,
-      rate: 1.0,
-      provider: 'alphavantage',
-      lastUpdated: new Date().toISOString()
-    });
-  }
-
-  if (!ALPHA_FX_KEY) {
-    return res.status(500).json({
-      error: 'ALPHA_FX_KEY (or ALPHA_VANTAGE_KEY) is not configured on the server'
-    });
-  }
-
-  const cacheKey = `fx:${from}->${to}`;
-  const cached = cache.get(cacheKey);
-  const now = Date.now();
-
-  if (cached && now - cached.timestamp < CACHE_TTL_MS) {
-    return res.json(cached.value);
-  }
-
-  const url =
-    'https://www.alphavantage.co/query' +
-    '?function=CURRENCY_EXCHANGE_RATE' +
-    `&from_currency=${encodeURIComponent(from)}` +
-    `&to_currency=${encodeURIComponent(to)}` +
-    `&apikey=${ALPHA_FX_KEY}`;
-
-  try {
-    const response = await axios.get(url);
-
-    if (response.status !== 200) {
-      throw new Error('Alpha Vantage FX status ' + response.status);
-    }
-
-    const data = response.data || {};
-    const payload = data['Realtime Currency Exchange Rate'];
-
-    if (!payload || !payload['5. Exchange Rate']) {
-      throw new Error('Bad FX response from Alpha Vantage');
-    }
-
-    const rate = parseFloat(payload['5. Exchange Rate']);
-    if (!Number.isFinite(rate)) {
-      throw new Error('FX rate is not a number');
-    }
-
-    const fxObj = {
-      fromCurrency: payload['1. From_Currency Code'],
-      toCurrency:   payload['3. To_Currency Code'],
-      rate,
-      provider: 'alphavantage',
-      lastUpdated: payload['6. Last Refreshed']
-    };
-
-    cache.set(cacheKey, {
-      timestamp: now,
-      value: fxObj
-    });
-
-    return res.json(fxObj);
-  } catch (err) {
-    console.error('Error in /fx:', err);
-    return res.status(500).json({
-      error: 'Failed to fetch FX rate',
-      message: String(err)
-    });
-  }
-});
 
 app.listen(PORT, () => {
   console.log(`ApexView quotes backend listening on port ${PORT}`);
