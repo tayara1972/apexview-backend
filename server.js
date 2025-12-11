@@ -4,6 +4,8 @@ const express = require('express');
 const axios = require('axios');
 const morgan = require('morgan');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit'); // <-- add this line
+
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,6 +32,25 @@ if (!ALPHA_FX_KEY) {
 
 app.use(morgan('dev'));
 app.use(cors());
+
+// Rate limiting: 60 requests per minute per IP for quotes and FX
+const quotesLimiter = rateLimit({
+  windowMs: 60 * 1000,   // 1 minute
+  max: 60,               // max 60 /quotes calls per minute per IP
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+const fxLimiter = rateLimit({
+  windowMs: 60 * 1000,   // 1 minute
+  max: 60,               // max 60 /fx calls per minute per IP
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+// Attach limiters to specific routes
+app.use('/quotes', quotesLimiter);
+app.use('/fx', fxLimiter);
 
 // -----------------------------------------------------------------------------
 // Health check
