@@ -48,9 +48,19 @@ const fxLimiter = rateLimit({
   legacyHeaders: false
 });
 
+const searchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,               // max 20 search calls per minute per IP
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+
 // Attach limiters to specific routes
 app.use('/quotes', quotesLimiter);
 app.use('/fx', fxLimiter);
+app.use('/search', searchLimiter);
+
 
 // -----------------------------------------------------------------------------
 // Health check
@@ -326,6 +336,91 @@ app.get('/quotes', async (req, res) => {
     console.error('Error in /quotes:', err);
     return res.status(500).json({
       error: 'Failed to fetch quotes',
+      message: String(err)
+    });
+  }
+});
+
+// -----------------------------------------------------------------------------
+// GET /search?query=TSLA
+// Alpha Vantage SYMBOL_SEARCH via backend
+// Returns a simplified list of matches for use in AddHoldingView.
+// -----------------------------------------------------------------------------
+app.get('/search', async (req, res) => {
+  const query = (req.query.query || '').trim();
+
+  if (!query) {
+    return res.status(400).json({
+      error: 'Missing query parameter'
+    });
+  }
+
+  // Basic length guard to avoid abuse
+  if (query.length < 1 || query.length > 20) {
+    return res.status(400).json({
+      error: 'Query length must be between 1 and 20 characters'
+    });
+  }
+
+  if (!ALPHA_FX_KEY) {
+    return res.status(500).json({
+      error: 'ALPHA_FX_KEY (or ALPHA_VANTAGE_KEY) is not configured on the server'
+    });
+  }
+
+  const cacheKey = `search:${query.toUpperCase()}`;
+  const now = Date.now();
+  const cached = cache.get(cacheKey);
+
+  if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+    return res.json(cached.value);
+  }
+
+  const url =
+    'https://www.alphavantage.co/query' +
+    '?function=SYMBOL_SEARCH' +
+    `&keywords=${encodeURIComponent(query)}` +
+    `&apikey=${ALPHA_FX_KEY}`;
+
+  try {
+    const response = await axios.get(url);
+
+    if (response.status !== 200) {
+      throw new Error('Alpha Vantage search status ' + response.status);
+    }
+
+    const data = response.data || {};
+    const matches = Array.isArray(data['bestMatches'])
+      ? data['bestMatches']
+      : [];
+
+    // Map Alpha’s messy field names to a clean shape
+    const results = matches.map((m) => ({
+      symbol: (m['1. symbol'] || '').trim(),
+      name: (m['2. name'] || '').trim(),
+      region: (m['4. region'] || '').trim(),
+      currency: (m['8. currency'] || '').trim()
+    }))
+    // Filter out any completely empty entries
+    .filter(r => r.symbol.length > 0 && r.name.length > 0);
+
+    const payload = {
+      provider: 'alphavantage',
+      environment: BACKEND_ENV,
+      query,
+      results
+    };
+
+    cache.set(cacheKey, {
+      timestamp: now,
+      value: payload
+    });
+
+    return res.json(payload);
+  } catch (err) {
+    console.error('Error in /search:', err);
+    return res.status(502).json({
+      error: 'Failed to search symbols via Alpha Vantage',
       message: String(err)
     });
   }
