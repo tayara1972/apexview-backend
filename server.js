@@ -55,110 +55,105 @@ app.get('/', (req, res) => {
 // This covers ~top 20 coins.
 // -----------------------------------------------------------------------------
 function mapToFinnhubSymbol(raw) {
-  const s = raw.toUpperCase().trim();
-  const binance = suffix => `BINANCE:${suffix}`;
+  if (!raw) return null;
 
-  switch (s) {
+  const sym = raw.trim().toUpperCase();
+
+  const cryptoMap = {
     // Bitcoin
-    case 'BTC':
-    case 'BTC-USD':
-      return binance('BTCUSDT');
+    "BTC": "BINANCE:BTCUSDT",
+    "BTC-USD": "BINANCE:BTCUSDT",
 
     // Ethereum
-    case 'ETH':
-    case 'ETH-USD':
-      return binance('ETHUSDT');
+    "ETH": "BINANCE:ETHUSDT",
+    "ETH-USD": "BINANCE:ETHUSDT",
 
     // Binance Coin
-    case 'BNB':
-    case 'BNB-USD':
-      return binance('BNBUSDT');
+    "BNB": "BINANCE:BNBUSDT",
+    "BNB-USD": "BINANCE:BNBUSDT",
 
     // Solana
-    case 'SOL':
-    case 'SOL-USD':
-      return binance('SOLUSDT');
+    "SOL": "BINANCE:SOLUSDT",
+    "SOL-USD": "BINANCE:SOLUSDT",
 
     // XRP
-    case 'XRP':
-    case 'XRP-USD':
-      return binance('XRPUSDT');
+    "XRP": "BINANCE:XRPUSDT",
+    "XRP-USD": "BINANCE:XRPUSDT",
 
     // Cardano
-    case 'ADA':
-    case 'ADA-USD':
-      return binance('ADAUSDT');
+    "ADA": "BINANCE:ADAUSDT",
+    "ADA-USD": "BINANCE:ADAUSDT",
 
     // Avalanche
-    case 'AVAX':
-    case 'AVAX-USD':
-      return binance('AVAXUSDT');
+    "AVAX": "BINANCE:AVAXUSDT",
+    "AVAX-USD": "BINANCE:AVAXUSDT",
 
     // Dogecoin
-    case 'DOGE':
-    case 'DOGE-USD':
-      return binance('DOGEUSDT');
+    "DOGE": "BINANCE:DOGEUSDT",
+    "DOGE-USD": "BINANCE:DOGEUSDT",
 
     // Polygon
-    case 'MATIC':
-    case 'MATIC-USD':
-      return binance('MATICUSDT');
+    "MATIC": "BINANCE:MATICUSDT",
+    "MATIC-USD": "BINANCE:MATICUSDT",
 
     // Polkadot
-    case 'DOT':
-    case 'DOT-USD':
-      return binance('DOTUSDT');
+    "DOT": "BINANCE:DOTUSDT",
+    "DOT-USD": "BINANCE:DOTUSDT",
 
     // Litecoin
-    case 'LTC':
-    case 'LTC-USD':
-      return binance('LTCUSDT');
+    "LTC": "BINANCE:LTCUSDT",
+    "LTC-USD": "BINANCE:LTCUSDT",
 
     // Chainlink
-    case 'LINK':
-    case 'LINK-USD':
-      return binance('LINKUSDT');
+    "LINK": "BINANCE:LINKUSDT",
+    "LINK-USD": "BINANCE:LINKUSDT",
 
     // Bitcoin Cash
-    case 'BCH':
-    case 'BCH-USD':
-      return binance('BCHUSDT');
+    "BCH": "BINANCE:BCHUSDT",
+    "BCH-USD": "BINANCE:BCHUSDT",
 
     // Shiba Inu
-    case 'SHIB':
-    case 'SHIB-USD':
-      return binance('SHIBUSDT');
+    "SHIB": "BINANCE:SHIBUSDT",
+    "SHIB-USD": "BINANCE:SHIBUSDT",
 
     // Uniswap
-    case 'UNI':
-    case 'UNI-USD':
-      return binance('UNIUSDT');
+    "UNI": "BINANCE:UNIUSDT",
+    "UNI-USD": "BINANCE:UNIUSDT",
 
     // Toncoin
-    case 'TON':
-    case 'TON-USD':
-      return binance('TONUSDT');
+    "TON": "BINANCE:TONUSDT",
+    "TON-USD": "BINANCE:TONUSDT",
 
     // Injective
-    case 'INJ':
-    case 'INJ-USD':
-      return binance('INJUSDT');
+    "INJ": "BINANCE:INJUSDT",
+    "INJ-USD": "BINANCE:INJUSDT",
 
     // Optimism
-    case 'OP':
-    case 'OP-USD':
-      return binance('OPUSDT');
+    "OP": "BINANCE:OPUSDT",
+    "OP-USD": "BINANCE:OPUSDT",
 
     // Arbitrum
-    case 'ARB':
-    case 'ARB-USD':
-      return binance('ARBUSDT');
+    "ARB": "BINANCE:ARBUSDT",
+    "ARB-USD": "BINANCE:ARBUSDT"
+  };
 
-    default:
-      // Treat as stock/ETF (AAPL, MSFT, TSLA, etc)
-      return s;
+  // 1) Explicit known mapping for top coins
+  if (cryptoMap[sym]) {
+    return cryptoMap[sym];
   }
+
+  // 2) Generic pattern: ANY <TOKEN>-USD -> BINANCE:<TOKEN>USDT
+  if (sym.endsWith("-USD")) {
+    const base = sym.slice(0, -4); // remove "-USD"
+    if (/^[A-Z0-9]{2,10}$/.test(base)) {
+      return `BINANCE:${base}USDT`;
+    }
+  }
+
+  // 3) Default: treat as stock/ETF, pass through (AAPL, MSFT, TSLA, etc.)
+  return sym;
 }
+
 
 // Simple symbol validation
 function isValidSymbol(sym) {
