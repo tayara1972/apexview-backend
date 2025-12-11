@@ -342,6 +342,95 @@ app.get('/quotes', async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
+// GET /fx?from=EUR&to=USD
+// Uses Alpha Vantage CURRENCY_EXCHANGE_RATE, with caching.
+// JSON shape is friendly for your iOS FX decoding.
+// -----------------------------------------------------------------------------
+app.get('/fx', async (req, res) => {
+  const from = (req.query.from || '').toUpperCase().trim();
+  const to   = (req.query.to   || '').toUpperCase().trim();
+
+  if (!from || !to) {
+    return res.status(400).json({
+      error: 'from and to query params are required'
+    });
+  }
+
+  if (from === to) {
+    return res.json({
+      fromCurrency: from,
+      toCurrency: to,
+      rate: 1.0,
+      provider: 'alphavantage',
+      lastUpdated: new Date().toISOString()
+    });
+  }
+
+  if (!ALPHA_FX_KEY) {
+    return res.status(500).json({
+      error: 'ALPHA_FX_KEY (or ALPHA_VANTAGE_KEY) is not configured on the server'
+    });
+  }
+
+  const cacheKey = `fx:${from}->${to}`;
+  const now = Date.now();
+  const cached = cache.get(cacheKey);
+
+  if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+    return res.json(cached.value);
+  }
+
+  const url =
+    'https://www.alphavantage.co/query' +
+    '?function=CURRENCY_EXCHANGE_RATE' +
+    `&from_currency=${encodeURIComponent(from)}` +
+    `&to_currency=${encodeURIComponent(to)}` +
+    `&apikey=${ALPHA_FX_KEY}`;
+
+  try {
+    const response = await axios.get(url);
+
+    if (response.status !== 200) {
+      throw new Error('Alpha Vantage FX status ' + response.status);
+    }
+
+    const data = response.data || {};
+    const payload = data['Realtime Currency Exchange Rate'];
+
+    if (!payload || !payload['5. Exchange Rate']) {
+      throw new Error('Bad FX response from Alpha Vantage');
+    }
+
+    const rate = parseFloat(payload['5. Exchange Rate']);
+    if (!Number.isFinite(rate)) {
+      throw new Error('FX rate is not a number');
+    }
+
+    const fxObj = {
+      fromCurrency: payload['1. From_Currency Code'],
+      toCurrency:   payload['3. To_Currency Code'],
+      rate,
+      provider: 'alphavantage',
+      lastUpdated: payload['6. Last Refreshed']
+    };
+
+    cache.set(cacheKey, {
+      timestamp: now,
+      value: fxObj
+    });
+
+    return res.json(fxObj);
+  } catch (err) {
+    console.error('Error in /fx:', err);
+    return res.status(500).json({
+      error: 'Failed to fetch FX rate',
+      message: String(err)
+    });
+  }
+});
+
+
+// -----------------------------------------------------------------------------
 // GET /search?query=TSLA
 // Alpha Vantage SYMBOL_SEARCH via backend
 // Returns a simplified list of matches for use in AddHoldingView.
