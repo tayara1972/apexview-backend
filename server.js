@@ -5,6 +5,7 @@ const axios = require('axios');
 const morgan = require('morgan');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit'); // <-- add this line
+const telemetryRouter = require('./routes/telemetry');
 
 
 const app = express();
@@ -32,6 +33,7 @@ if (!ALPHA_FX_KEY) {
 
 app.use(morgan('dev'));
 app.use(cors());
+app.use(express.json({ limit: '50kb' }));
 
 // Rate limiting: 60 requests per minute per IP for quotes and FX
 const quotesLimiter = rateLimit({
@@ -55,11 +57,19 @@ const searchLimiter = rateLimit({
   legacyHeaders: false
 });
 
+const telemetryLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,               // max 10 telemetry posts per minute per IP
+  standardHeaders: true,
+  legacyHeaders: false
+});
 
 // Attach limiters to specific routes
 app.use('/quotes', quotesLimiter);
 app.use('/fx', fxLimiter);
 app.use('/search', searchLimiter);
+app.use('/telemetry', telemetryLimiter);
+app.use('/telemetry', telemetryRouter);
 
 
 // -----------------------------------------------------------------------------
