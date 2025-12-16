@@ -2,11 +2,11 @@ require('dotenv').config();
 
 const express = require('express');
 const axios = require('axios');
-const morgan = require('morgan');
 const cors = require('cors');
-const rateLimit = require('express-rate-limit'); // <-- add this line
-const telemetryRouter = require('./routes/telemetry');
+const rateLimit = require('express-rate-limit');
+const crypto = require('crypto');
 
+const telemetryRouter = require('./routes/telemetry');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,35 +31,55 @@ if (!ALPHA_FX_KEY) {
   console.warn('WARNING: ALPHA_FX_KEY (or ALPHA_VANTAGE_KEY) is not set. /fx will fail.');
 }
 
-app.use(morgan('dev'));
 app.use(cors());
 app.use(express.json({ limit: '50kb' }));
 
-// Rate limiting: 60 requests per minute per IP for quotes and FX
+// -----------------------------------------------------------------------------
+// Privacy safe request logging
+// - No query string logging (symbols, balances, etc. must never appear in logs)
+// - Logs method + path only
+// -----------------------------------------------------------------------------
+app.use((req, res, next) => {
+  const requestId = crypto.randomUUID?.() || crypto.randomBytes(16).toString('hex');
+  res.setHeader('x-request-id', requestId);
+
+  const start = Date.now();
+  res.on('finish', () => {
+    // Only log path without query string
+    const pathOnly = req.path;
+    console.log(`${req.method} ${pathOnly} -> ${res.statusCode} (${Date.now() - start}ms) id=${requestId}`);
+  });
+
+  next();
+});
+
+// -----------------------------------------------------------------------------
+// Rate limiting
+// -----------------------------------------------------------------------------
 const quotesLimiter = rateLimit({
-  windowMs: 60 * 1000,   // 1 minute
-  max: 60,               // max 60 /quotes calls per minute per IP
+  windowMs: 60 * 1000,
+  max: 60,
   standardHeaders: true,
   legacyHeaders: false
 });
 
 const fxLimiter = rateLimit({
-  windowMs: 60 * 1000,   // 1 minute
-  max: 60,               // max 60 /fx calls per minute per IP
+  windowMs: 60 * 1000,
+  max: 60,
   standardHeaders: true,
   legacyHeaders: false
 });
 
 const searchLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 20,               // max 20 search calls per minute per IP
+  max: 20,
   standardHeaders: true,
   legacyHeaders: false
 });
 
 const telemetryLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 10,               // max 10 telemetry posts per minute per IP
+  max: 10,
   standardHeaders: true,
   legacyHeaders: false
 });
@@ -70,7 +90,6 @@ app.use('/fx', fxLimiter);
 app.use('/search', searchLimiter);
 app.use('/telemetry', telemetryLimiter);
 app.use('/telemetry', telemetryRouter);
-
 
 // -----------------------------------------------------------------------------
 // Health check
@@ -91,9 +110,6 @@ app.get('/', (req, res) => {
 
 // -----------------------------------------------------------------------------
 // Symbol mapping: app symbols -> Finnhub symbols
-// Stocks/ETFs: pass through (AAPL, MSFT, TSLA, etc)
-// Crypto: map to BINANCE *USDT pairs (approx USD)
-// This covers ~top 20 coins.
 // -----------------------------------------------------------------------------
 function mapToFinnhubSymbol(raw) {
   if (!raw) return null;
@@ -101,117 +117,64 @@ function mapToFinnhubSymbol(raw) {
   const sym = raw.trim().toUpperCase();
 
   const cryptoMap = {
-    // Bitcoin
     "BTC": "BINANCE:BTCUSDT",
     "BTC-USD": "BINANCE:BTCUSDT",
-
-    // Ethereum
     "ETH": "BINANCE:ETHUSDT",
     "ETH-USD": "BINANCE:ETHUSDT",
-
-    // Binance Coin
     "BNB": "BINANCE:BNBUSDT",
     "BNB-USD": "BINANCE:BNBUSDT",
-
-    // Solana
     "SOL": "BINANCE:SOLUSDT",
     "SOL-USD": "BINANCE:SOLUSDT",
-
-    // XRP
     "XRP": "BINANCE:XRPUSDT",
     "XRP-USD": "BINANCE:XRPUSDT",
-
-    // Cardano
     "ADA": "BINANCE:ADAUSDT",
     "ADA-USD": "BINANCE:ADAUSDT",
-
-    // Avalanche
     "AVAX": "BINANCE:AVAXUSDT",
     "AVAX-USD": "BINANCE:AVAXUSDT",
-
-    // Dogecoin
     "DOGE": "BINANCE:DOGEUSDT",
     "DOGE-USD": "BINANCE:DOGEUSDT",
-
-    // Polygon
     "MATIC": "BINANCE:MATICUSDT",
     "MATIC-USD": "BINANCE:MATICUSDT",
-
-    // Polkadot
     "DOT": "BINANCE:DOTUSDT",
     "DOT-USD": "BINANCE:DOTUSDT",
-
-    // Litecoin
     "LTC": "BINANCE:LTCUSDT",
     "LTC-USD": "BINANCE:LTCUSDT",
-
-    // Chainlink
     "LINK": "BINANCE:LINKUSDT",
     "LINK-USD": "BINANCE:LINKUSDT",
-
-    // Bitcoin Cash
     "BCH": "BINANCE:BCHUSDT",
     "BCH-USD": "BINANCE:BCHUSDT",
-
-    // Shiba Inu
     "SHIB": "BINANCE:SHIBUSDT",
     "SHIB-USD": "BINANCE:SHIBUSDT",
-
-    // Uniswap
     "UNI": "BINANCE:UNIUSDT",
     "UNI-USD": "BINANCE:UNIUSDT",
-
-    // Toncoin
     "TON": "BINANCE:TONUSDT",
     "TON-USD": "BINANCE:TONUSDT",
-
-    // Injective
     "INJ": "BINANCE:INJUSDT",
     "INJ-USD": "BINANCE:INJUSDT",
-
-    // Optimism
     "OP": "BINANCE:OPUSDT",
     "OP-USD": "BINANCE:OPUSDT",
-
-    // Arbitrum
     "ARB": "BINANCE:ARBUSDT",
     "ARB-USD": "BINANCE:ARBUSDT"
   };
 
-  // 1) Explicit known mapping for top coins
-  if (cryptoMap[sym]) {
-    return cryptoMap[sym];
-  }
+  if (cryptoMap[sym]) return cryptoMap[sym];
 
-  // 2) Generic pattern: ANY <TOKEN>-USD -> BINANCE:<TOKEN>USDT
   if (sym.endsWith("-USD")) {
-    const base = sym.slice(0, -4); // remove "-USD"
+    const base = sym.slice(0, -4);
     if (/^[A-Z0-9]{2,10}$/.test(base)) {
       return `BINANCE:${base}USDT`;
     }
   }
 
-  // 3) Default: treat as stock/ETF, pass through (AAPL, MSFT, TSLA, etc.)
   return sym;
 }
 
-
-// Simple symbol validation
 function isValidSymbol(sym) {
   return /^[A-Z0-9.\-]{1,20}$/.test(sym);
 }
 
 // -----------------------------------------------------------------------------
-// GET /quotes?symbols=AAPL,BTC-USD,ETH-USD
-// Returns:
-// {
-//   "source": "live",
-//   "data": {
-//     "AAPL":    { ... },
-//     "BTC-USD": { ... },
-//     "ETH-USD": { ... }
-//   }
-// }
+// GET /quotes?symbols=...
 // -----------------------------------------------------------------------------
 app.get('/quotes', async (req, res) => {
   const symbolsParam = req.query.symbols;
@@ -225,7 +188,6 @@ app.get('/quotes', async (req, res) => {
     .map(s => s.trim().toUpperCase())
     .filter(Boolean);
 
-  // Deduplicate
   requestedSymbols = Array.from(new Set(requestedSymbols));
 
   const MAX_SYMBOLS = 100;
@@ -235,24 +197,17 @@ app.get('/quotes', async (req, res) => {
   }
 
   if (requestedSymbols.length > MAX_SYMBOLS) {
-    return res.status(400).json({
-      error: `Too many symbols. Max allowed is ${MAX_SYMBOLS}.`
-    });
+    return res.status(400).json({ error: `Too many symbols. Max allowed is ${MAX_SYMBOLS}.` });
   }
 
-  // Separate valid and invalid symbols
   const validSymbols = [];
   const invalidSymbols = [];
 
   for (const sym of requestedSymbols) {
-    if (isValidSymbol(sym)) {
-      validSymbols.push(sym);
-    } else {
-      invalidSymbols.push(sym);
-    }
+    if (isValidSymbol(sym)) validSymbols.push(sym);
+    else invalidSymbols.push(sym);
   }
 
-  // If nothing is valid, fail with a clear message
   if (validSymbols.length === 0) {
     return res.status(400).json({
       error: 'No valid symbols after validation',
@@ -266,10 +221,7 @@ app.get('/quotes', async (req, res) => {
     });
   }
 
-  const pairs = validSymbols.map(raw => ({
-    raw,
-    finnhub: mapToFinnhubSymbol(raw)
-  }));
+  const pairs = validSymbols.map(raw => ({ raw, finnhub: mapToFinnhubSymbol(raw) }));
 
   const now = Date.now();
   const result = {};
@@ -280,13 +232,11 @@ app.get('/quotes', async (req, res) => {
         const cacheKey = `quote:${finnhub}`;
         const cached = cache.get(cacheKey);
 
-        // Cache hit
         if (cached && now - cached.timestamp < CACHE_TTL_MS) {
           result[raw] = { ...cached.value, symbol: raw };
           return;
         }
 
-        // Cache miss
         try {
           const url =
             'https://finnhub.io/api/v1/quote?symbol=' +
@@ -305,23 +255,18 @@ app.get('/quotes', async (req, res) => {
           const value = {
             symbol: raw,
             previousClose: typeof q.pc === 'number' ? q.pc : null,
-            current:       typeof q.c  === 'number' ? q.c  : null,
-            high:          typeof q.h  === 'number' ? q.h  : null,
-            low:           typeof q.l  === 'number' ? q.l  : null,
-            open:          typeof q.o  === 'number' ? q.o  : null,
+            current: typeof q.c === 'number' ? q.c : null,
+            high: typeof q.h === 'number' ? q.h : null,
+            low: typeof q.l === 'number' ? q.l : null,
+            open: typeof q.o === 'number' ? q.o : null,
             provider: 'finnhub'
           };
 
           cache.set(cacheKey, { timestamp: now, value });
           result[raw] = value;
         } catch (innerErr) {
-          console.error(
-            'Error fetching quote for',
-            raw,
-            'mapped as',
-            finnhub,
-            innerErr.message || innerErr
-          );
+          // Privacy safe: do not log symbols or mapped symbols
+          console.error('Error fetching quote from provider:', innerErr.message || String(innerErr));
 
           result[raw] = {
             symbol: raw,
@@ -343,27 +288,22 @@ app.get('/quotes', async (req, res) => {
       invalidSymbols: invalidSymbols.length > 0 ? invalidSymbols : undefined
     });
   } catch (err) {
-    console.error('Error in /quotes:', err);
+    console.error('Error in /quotes:', err.message || String(err));
     return res.status(500).json({
-      error: 'Failed to fetch quotes',
-      message: String(err)
+      error: 'Failed to fetch quotes'
     });
   }
 });
 
 // -----------------------------------------------------------------------------
 // GET /fx?from=EUR&to=USD
-// Uses Alpha Vantage CURRENCY_EXCHANGE_RATE, with caching.
-// JSON shape is friendly for your iOS FX decoding.
 // -----------------------------------------------------------------------------
 app.get('/fx', async (req, res) => {
   const from = (req.query.from || '').toUpperCase().trim();
-  const to   = (req.query.to   || '').toUpperCase().trim();
+  const to = (req.query.to || '').toUpperCase().trim();
 
   if (!from || !to) {
-    return res.status(400).json({
-      error: 'from and to query params are required'
-    });
+    return res.status(400).json({ error: 'from and to query params are required' });
   }
 
   if (from === to) {
@@ -418,47 +358,35 @@ app.get('/fx', async (req, res) => {
 
     const fxObj = {
       fromCurrency: payload['1. From_Currency Code'],
-      toCurrency:   payload['3. To_Currency Code'],
+      toCurrency: payload['3. To_Currency Code'],
       rate,
       provider: 'alphavantage',
       lastUpdated: payload['6. Last Refreshed']
     };
 
-    cache.set(cacheKey, {
-      timestamp: now,
-      value: fxObj
-    });
+    cache.set(cacheKey, { timestamp: now, value: fxObj });
 
     return res.json(fxObj);
   } catch (err) {
-    console.error('Error in /fx:', err);
+    console.error('Error in /fx:', err.message || String(err));
     return res.status(500).json({
-      error: 'Failed to fetch FX rate',
-      message: String(err)
+      error: 'Failed to fetch FX rate'
     });
   }
 });
 
-
 // -----------------------------------------------------------------------------
 // GET /search?query=TSLA
-// Alpha Vantage SYMBOL_SEARCH via backend
-// Returns a simplified list of matches for use in AddHoldingView.
 // -----------------------------------------------------------------------------
 app.get('/search', async (req, res) => {
   const query = (req.query.query || '').trim();
 
   if (!query) {
-    return res.status(400).json({
-      error: 'Missing query parameter'
-    });
+    return res.status(400).json({ error: 'Missing query parameter' });
   }
 
-  // Basic length guard to avoid abuse
   if (query.length < 1 || query.length > 20) {
-    return res.status(400).json({
-      error: 'Query length must be between 1 and 20 characters'
-    });
+    return res.status(400).json({ error: 'Query length must be between 1 and 20 characters' });
   }
 
   if (!ALPHA_FX_KEY) {
@@ -489,19 +417,16 @@ app.get('/search', async (req, res) => {
     }
 
     const data = response.data || {};
-    const matches = Array.isArray(data['bestMatches'])
-      ? data['bestMatches']
-      : [];
+    const matches = Array.isArray(data['bestMatches']) ? data['bestMatches'] : [];
 
-    // Map Alpha’s messy field names to a clean shape
-    const results = matches.map((m) => ({
-      symbol: (m['1. symbol'] || '').trim(),
-      name: (m['2. name'] || '').trim(),
-      region: (m['4. region'] || '').trim(),
-      currency: (m['8. currency'] || '').trim()
-    }))
-    // Filter out any completely empty entries
-    .filter(r => r.symbol.length > 0 && r.name.length > 0);
+    const results = matches
+      .map((m) => ({
+        symbol: (m['1. symbol'] || '').trim(),
+        name: (m['2. name'] || '').trim(),
+        region: (m['4. region'] || '').trim(),
+        currency: (m['8. currency'] || '').trim()
+      }))
+      .filter(r => r.symbol.length > 0 && r.name.length > 0);
 
     const payload = {
       provider: 'alphavantage',
@@ -510,21 +435,16 @@ app.get('/search', async (req, res) => {
       results
     };
 
-    cache.set(cacheKey, {
-      timestamp: now,
-      value: payload
-    });
+    cache.set(cacheKey, { timestamp: now, value: payload });
 
     return res.json(payload);
   } catch (err) {
-    console.error('Error in /search:', err);
+    console.error('Error in /search:', err.message || String(err));
     return res.status(502).json({
-      error: 'Failed to search symbols via Alpha Vantage',
-      message: String(err)
+      error: 'Failed to search symbols via Alpha Vantage'
     });
   }
 });
-
 
 app.listen(PORT, () => {
   console.log(`ApexView quotes backend listening on port ${PORT}`);
