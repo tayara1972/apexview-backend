@@ -379,7 +379,8 @@ app.get('/fx', async (req, res) => {
 // GET /search?query=TSLA
 // -----------------------------------------------------------------------------
 app.get('/search', async (req, res) => {
-  const query = (req.query.query || '').trim();
+ const query = (req.query.query || req.query.q || '').trim();
+
 
   if (!query) {
     return res.status(400).json({ error: 'Missing query parameter' });
