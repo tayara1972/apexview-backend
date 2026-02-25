@@ -319,10 +319,16 @@ app.get('/fx', async (req, res) => {
       provider: 'alphavantage'
     });
 
-  } catch (err) {
-    console.error('Error in /fx:', err.message);
-    return res.status(502).json({ error: 'Failed to fetch FX rate' });
-  }
+} catch (err) {
+  console.error("FX status:", err.response?.status);
+  console.error("FX data:", err.response?.data);
+  console.error("FX message:", err.message);
+
+  return res.status(502).json({
+    error: "Failed to fetch FX rate",
+    detail: err.response?.data || err.message
+  });
+}
 });
 
 app.listen(PORT, () => {
