@@ -292,12 +292,16 @@ const results = matches
 
     return res.json(payload);
 
-  } catch (err) {
-    console.error('Error in /search:', err.message);
-    return res.status(502).json({
-      error: 'Failed to search via Finnhub'
-    });
-  }
+ } catch (err) {
+  console.error("Search status:", err.response?.status);
+  console.error("Search data:", err.response?.data);
+  console.error("Search message:", err.message);
+
+  return res.status(502).json({
+    error: "Failed to search via Finnhub",
+    detail: err.response?.data || err.message
+  });
+}
 });
 
 // ----------------------------------------------------------------------------
