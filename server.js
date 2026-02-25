@@ -66,7 +66,17 @@ app.use('/telemetry', limiter);
 app.use('/telemetry', telemetryRouter);
 
 // ----------------------------------------------------------------------------
-// Health check
+// Lightweight health check (for wake-up + monitoring)
+// ----------------------------------------------------------------------------
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    environment: BACKEND_ENV
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Root route (detailed info)
 // ----------------------------------------------------------------------------
 app.get('/', (req, res) => {
   res.json({
