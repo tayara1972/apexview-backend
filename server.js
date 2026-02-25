@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const express = require('express');
+
 const axios = require('axios');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
@@ -9,6 +10,7 @@ const crypto = require('crypto');
 const telemetryRouter = require('./routes/telemetry');
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
 const BACKEND_ENV = process.env.BACKEND_ENV || process.env.NODE_ENV || 'development';
