@@ -265,7 +265,9 @@ try {
     return;
   }
 }
+console.log("Using provider for", raw, ":", q?.pc ? "AlphaVantage" : "Finnhub");
 
+    
     const matches = Array.isArray(data.result) ? data.result : [];
 
 const results = matches
