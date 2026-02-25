@@ -133,40 +133,47 @@ app.get('/quotes', async (req, res) => {
   const result = {};
 
   try {
-    await Promise.all(
-      symbols.map(async raw => {
-        const mapped = mapToFinnhubSymbol(raw);
-        const cacheKey = `quote:${mapped}`;
-        const cached = cache.get(cacheKey);
+await Promise.all(
+  symbols.map(async raw => {
+    try {
+      const mapped = mapToFinnhubSymbol(raw);
+      const cacheKey = `quote:${mapped}`;
+      const cached = cache.get(cacheKey);
 
-        if (cached && now - cached.timestamp < CACHE_TTL_MS) {
-          result[raw] = cached.value;
-          return;
-        }
+      if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+        result[raw] = cached.value;
+        return;
+      }
 
-        const url =
-          'https://finnhub.io/api/v1/quote?symbol=' +
-          encodeURIComponent(mapped) +
-          '&token=' +
-          FINNHUB_API_KEY;
+      const url =
+        'https://finnhub.io/api/v1/quote?symbol=' +
+        encodeURIComponent(mapped) +
+        '&token=' +
+        FINNHUB_API_KEY;
 
-        const response = await axios.get(url);
-        const q = response.data || {};
+      const response = await axios.get(url, { timeout: 8000 });
+      const q = response.data || {};
 
-        const value = {
-          symbol: raw,
-          previousClose: q.pc ?? null,
-          current: q.c ?? null,
-          high: q.h ?? null,
-          low: q.l ?? null,
-          open: q.o ?? null,
-          provider: 'finnhub'
-        };
+      const value = {
+        symbol: raw,
+        previousClose: q.pc ?? null,
+        current: q.c ?? null,
+        high: q.h ?? null,
+        low: q.l ?? null,
+        open: q.o ?? null,
+        provider: 'finnhub'
+      };
 
-        cache.set(cacheKey, { timestamp: now, value });
-        result[raw] = value;
-      })
-    );
+      cache.set(cacheKey, { timestamp: now, value });
+      result[raw] = value;
+
+    } catch (err) {
+      console.error('Quote fetch failed for', raw, err.message);
+      // Do NOT throw
+      // Just skip this symbol
+    }
+  })
+);
 
     return res.json({
       environment: BACKEND_ENV,
