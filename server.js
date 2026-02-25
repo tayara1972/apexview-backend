@@ -215,12 +215,16 @@ app.get('/search', async (req, res) => {
 
     const matches = Array.isArray(data.result) ? data.result : [];
 
-    const results = matches.map(m => ({
-      symbol: m.symbol,
-      name: m.description,
-      region: '',
-      currency: ''
-    }));
+const results = matches
+  .filter(m => m.symbol && m.description)
+  .filter(m => !m.symbol.includes('.')) // removes AAPL.TO, AAPL.MX, etc
+  .map(m => ({
+    symbol: m.symbol,
+    name: m.description,
+    region: '',
+    currency: ''
+  }))
+  .slice(0, 10);
 
     const payload = {
       provider: 'finnhub',
