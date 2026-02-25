@@ -185,11 +185,13 @@ await Promise.all(
   })
 );
 
-    return res.json({
-      environment: BACKEND_ENV,
-      data: result
-    });
-
+ return res.json({
+  source: 'finnhub',
+  environment: BACKEND_ENV,
+  version: 1,
+  data: result
+});
+    
   } catch (err) {
     console.error('Error in /quotes:', err.message);
     return res.status(500).json({ error: 'Failed to fetch quotes' });
