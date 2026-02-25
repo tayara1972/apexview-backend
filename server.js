@@ -231,57 +231,21 @@ app.get('/search', async (req, res) => {
       '&token=' +
       FINNHUB_API_KEY;
 
-let q;
+    const response = await axios.get(url, { timeout: 8000 });
+    const data = response.data || {};
 
-try {
-  const response = await axios.get(url);
-  q = response.data || {};
-} catch (err) {
-  console.error(`Finnhub failed for ${raw}:`, err.message);
-
-  // Fallback to Alpha Vantage if available
-  if (ALPHA_FX_KEY) {
-    try {
-      const avUrl =
-        'https://www.alphavantage.co/query?function=GLOBAL_QUOTE' +
-        `&symbol=${encodeURIComponent(raw)}` +
-        `&apikey=${ALPHA_FX_KEY}`;
-
-      const avResp = await axios.get(avUrl);
-      const avData = avResp.data?.['Global Quote'] || {};
-
-      q = {
-        pc: parseFloat(avData['08. previous close']),
-        c: parseFloat(avData['05. price']),
-        h: parseFloat(avData['03. high']),
-        l: parseFloat(avData['04. low']),
-        o: parseFloat(avData['02. open'])
-      };
-
-      console.log(`Fallback used for ${raw}`);
-    } catch (fallbackErr) {
-      console.error(`Fallback failed for ${raw}:`, fallbackErr.message);
-      return;
-    }
-  } else {
-    return;
-  }
-}
-console.log("Using provider for", raw, ":", q?.pc ? "AlphaVantage" : "Finnhub");
-
-    
     const matches = Array.isArray(data.result) ? data.result : [];
 
-const results = matches
-  .filter(m => m.symbol && m.description)
-  .filter(m => !m.symbol.includes('.')) // removes AAPL.TO, AAPL.MX, etc
-  .map(m => ({
-    symbol: m.symbol,
-    name: m.description,
-    region: '',
-    currency: ''
-  }))
-  .slice(0, 10);
+    const results = matches
+      .filter(m => m.symbol && m.description)
+      .filter(m => !m.symbol.includes('.'))
+      .map(m => ({
+        symbol: m.symbol,
+        name: m.description,
+        region: '',
+        currency: ''
+      }))
+      .slice(0, 10);
 
     const payload = {
       provider: 'finnhub',
@@ -294,18 +258,17 @@ const results = matches
 
     return res.json(payload);
 
- } catch (err) {
-  console.error("Search status:", err.response?.status);
-  console.error("Search data:", err.response?.data);
-  console.error("Search message:", err.message);
+  } catch (err) {
+    console.error("Search status:", err.response?.status);
+    console.error("Search data:", err.response?.data);
+    console.error("Search message:", err.message);
 
-  return res.status(502).json({
-    error: "Failed to search via Finnhub",
-    detail: err.response?.data || err.message
-  });
-}
+    return res.status(502).json({
+      error: "Failed to search via Finnhub",
+      detail: err.response?.data || err.message
+    });
+  }
 });
-
 // ----------------------------------------------------------------------------
 // GET /fx  (Alpha Vantage)
 // ----------------------------------------------------------------------------
