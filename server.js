@@ -229,8 +229,42 @@ app.get('/search', async (req, res) => {
       '&token=' +
       FINNHUB_API_KEY;
 
-    const response = await axios.get(url);
-    const data = response.data || {};
+let q;
+
+try {
+  const response = await axios.get(url);
+  q = response.data || {};
+} catch (err) {
+  console.error(`Finnhub failed for ${raw}:`, err.message);
+
+  // Fallback to Alpha Vantage if available
+  if (ALPHA_FX_KEY) {
+    try {
+      const avUrl =
+        'https://www.alphavantage.co/query?function=GLOBAL_QUOTE' +
+        `&symbol=${encodeURIComponent(raw)}` +
+        `&apikey=${ALPHA_FX_KEY}`;
+
+      const avResp = await axios.get(avUrl);
+      const avData = avResp.data?.['Global Quote'] || {};
+
+      q = {
+        pc: parseFloat(avData['08. previous close']),
+        c: parseFloat(avData['05. price']),
+        h: parseFloat(avData['03. high']),
+        l: parseFloat(avData['04. low']),
+        o: parseFloat(avData['02. open'])
+      };
+
+      console.log(`Fallback used for ${raw}`);
+    } catch (fallbackErr) {
+      console.error(`Fallback failed for ${raw}:`, fallbackErr.message);
+      return;
+    }
+  } else {
+    return;
+  }
+}
 
     const matches = Array.isArray(data.result) ? data.result : [];
 
