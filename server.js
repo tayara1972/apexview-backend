@@ -19,14 +19,10 @@ const CACHE_TTL_MS = 60 * 60 * 1000;
 const cache = new Map();
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
-const ALPHA_FX_KEY = process.env.ALPHA_FX_KEY || process.env.ALPHA_VANTAGE_KEY;
+
 
 if (!FINNHUB_API_KEY) {
   console.warn('WARNING: FINNHUB_API_KEY is not set.');
-}
-
-if (!ALPHA_FX_KEY) {
-  console.warn('WARNING: ALPHA_FX_KEY is not set.');
 }
 
 app.use(cors());
@@ -269,8 +265,9 @@ app.get('/search', async (req, res) => {
     });
   }
 });
+
 // ----------------------------------------------------------------------------
-// GET /fx  (Alpha Vantage)
+// GET /fx  (Finnhub)
 // ----------------------------------------------------------------------------
 app.get('/fx', async (req, res) => {
   const from = (req.query.from || '').toUpperCase().trim();
@@ -285,52 +282,70 @@ app.get('/fx', async (req, res) => {
       fromCurrency: from,
       toCurrency: to,
       rate: 1,
-      provider: 'alphavantage'
+      provider: 'finnhub'
     });
   }
 
-  if (!ALPHA_FX_KEY) {
+  if (!FINNHUB_API_KEY) {
     return res.status(500).json({
-      error: 'ALPHA_FX_KEY not configured'
+      error: 'FINNHUB_API_KEY not configured'
     });
   }
 
-  try {
-    const url =
-      'https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE' +
-      `&from_currency=${from}` +
-      `&to_currency=${to}` +
-      `&apikey=${ALPHA_FX_KEY}`;
+  const cacheKey = `fx:${from}`;
+  const now = Date.now();
+  const cached = cache.get(cacheKey);
 
-    const response = await axios.get(url);
-    const data = response.data || {};
-    const payload = data['Realtime Currency Exchange Rate'];
-
-    if (!payload || !payload['5. Exchange Rate']) {
-      throw new Error('Invalid FX response');
+  // Cache base currency rates for 1 hour
+  if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+    const rate = cached.value[to];
+    if (!rate) {
+      return res.status(404).json({ error: 'Currency not supported' });
     }
-
-    const rate = parseFloat(payload['5. Exchange Rate']);
 
     return res.json({
       fromCurrency: from,
       toCurrency: to,
       rate,
-      provider: 'alphavantage'
+      provider: 'finnhub'
+    });
+  }
+
+  try {
+    const url =
+      'https://finnhub.io/api/v1/forex/rates?base=' +
+      encodeURIComponent(from) +
+      '&token=' +
+      FINNHUB_API_KEY;
+
+    const response = await axios.get(url, { timeout: 8000 });
+    const data = response.data || {};
+    const quotes = data.quote || {};
+
+    if (!quotes[to]) {
+      throw new Error('Currency not found in Finnhub response');
+    }
+
+    cache.set(cacheKey, {
+      timestamp: now,
+      value: quotes
     });
 
-} catch (err) {
-  console.error("FX status:", err.response?.status);
-  console.error("FX data:", err.response?.data);
-  console.error("FX message:", err.message);
+    return res.json({
+      fromCurrency: from,
+      toCurrency: to,
+      rate: quotes[to],
+      provider: 'finnhub'
+    });
 
-  return res.status(502).json({
-    error: "Failed to fetch FX rate",
-    detail: err.response?.data || err.message
-  });
-}
-});
+  } catch (err) {
+    console.error("FX status:", err.response?.status);
+    console.error("FX data:", err.response?.data);
+    console.error("FX message:", err.message);
 
-app.listen(PORT, () => {
-  console.log(`ApexView backend listening on port ${PORT}`);
+    return res.status(502).json({
+      error: "Failed to fetch FX rate",
+      detail: err.response?.data || err.message
+    });
+  }
 });
