@@ -84,7 +84,7 @@ app.get('/', (req, res) => {
     providers: {
       quotes: 'finnhub',
       search: 'finnhub',
-      fx: ALPHA_FX_KEY ? 'alphavantage' : 'none'
+      fx: 'finnhub'
     },
     cacheTtlMinutes: CACHE_TTL_MS / 60000,
     time: new Date().toISOString()
