@@ -11,6 +11,7 @@ const telemetryRouter = require('./routes/telemetry');
 
 const app = express();
 app.set('trust proxy', 1);
+app.set('etag', false);
 const PORT = process.env.PORT || 3000;
 
 const BACKEND_ENV = process.env.BACKEND_ENV || process.env.NODE_ENV || 'development';
