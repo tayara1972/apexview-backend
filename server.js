@@ -292,9 +292,20 @@ app.get('/fx', async (req, res) => {
 
   if (cached && now - cached.timestamp < CACHE_TTL_MS) {
     const rate = cached.value[to];
-    if (!rate) {
-      return res.status(404).json({ error: 'Currency not supported' });
-    }
+   if (!rate) {
+  // Try inverted pair
+  const inverted = data.rates[from];
+  if (inverted) {
+    return res.json({
+      fromCurrency: from,
+      toCurrency: to,
+      rate: 1 / inverted,
+      provider: 'open-er-api'
+    });
+  }
+
+  return res.status(404).json({ error: 'Currency not supported' });
+}
 
     return res.json({
       fromCurrency: from,
