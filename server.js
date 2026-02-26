@@ -84,7 +84,7 @@ app.get('/', (req, res) => {
     providers: {
       quotes: 'finnhub',
       search: 'finnhub',
-      fx: 'finnhub'
+     fx: 'exchangerate.host'
     },
     cacheTtlMinutes: CACHE_TTL_MS / 60000,
     time: new Date().toISOString()
@@ -267,7 +267,7 @@ app.get('/search', async (req, res) => {
 });
 
 // ----------------------------------------------------------------------------
-// GET /fx  (Finnhub via OANDA pairs)
+// GET /fx  (exchangerate.host - no API key)
 // ----------------------------------------------------------------------------
 app.get('/fx', async (req, res) => {
   const from = (req.query.from || '').toUpperCase().trim();
@@ -282,45 +282,36 @@ app.get('/fx', async (req, res) => {
       fromCurrency: from,
       toCurrency: to,
       rate: 1,
-      provider: 'finnhub'
+      provider: 'exchangerate.host'
     });
   }
 
-  if (!FINNHUB_API_KEY) {
-    return res.status(500).json({
-      error: 'FINNHUB_API_KEY not configured'
-    });
-  }
-
-  const pair = `OANDA:${from}${to}`;
-  const cacheKey = `fx:${pair}`;
+  const cacheKey = `fx:${from}:${to}`;
   const now = Date.now();
   const cached = cache.get(cacheKey);
 
+  // Cache for 1 hour
   if (cached && now - cached.timestamp < CACHE_TTL_MS) {
     return res.json({
       fromCurrency: from,
       toCurrency: to,
       rate: cached.value,
-      provider: 'finnhub'
+      provider: 'exchangerate.host'
     });
   }
 
   try {
     const url =
-      'https://finnhub.io/api/v1/quote?symbol=' +
-      encodeURIComponent(pair) +
-      '&token=' +
-      FINNHUB_API_KEY;
+      `https://api.exchangerate.host/latest?base=${from}&symbols=${to}`;
 
     const response = await axios.get(url, { timeout: 8000 });
-    const q = response.data || {};
+    const data = response.data || {};
 
-    const rate = q.c ?? q.pc;
-
-    if (!rate) {
-      throw new Error('Invalid FX quote response');
+    if (!data.rates || !data.rates[to]) {
+      throw new Error('Invalid FX response');
     }
+
+    const rate = data.rates[to];
 
     cache.set(cacheKey, {
       timestamp: now,
@@ -331,7 +322,7 @@ app.get('/fx', async (req, res) => {
       fromCurrency: from,
       toCurrency: to,
       rate,
-      provider: 'finnhub'
+      provider: 'exchangerate.host'
     });
 
   } catch (err) {
