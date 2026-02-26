@@ -84,7 +84,7 @@ app.get('/', (req, res) => {
     providers: {
       quotes: 'finnhub',
       search: 'finnhub',
-     fx: 'exchangerate.host'
+    fx: 'open-er-api'
     },
     cacheTtlMinutes: CACHE_TTL_MS / 60000,
     time: new Date().toISOString()
@@ -267,7 +267,7 @@ app.get('/search', async (req, res) => {
 });
 
 // ----------------------------------------------------------------------------
-// GET /fx  (exchangerate.host - no API key)
+// GET /fx  (open.er-api.com - no API key required)
 // ----------------------------------------------------------------------------
 app.get('/fx', async (req, res) => {
   const from = (req.query.from || '').toUpperCase().trim();
@@ -282,47 +282,54 @@ app.get('/fx', async (req, res) => {
       fromCurrency: from,
       toCurrency: to,
       rate: 1,
-      provider: 'exchangerate.host'
+      provider: 'open-er-api'
     });
   }
 
-  const cacheKey = `fx:${from}:${to}`;
+  const cacheKey = `fx:${from}`;
   const now = Date.now();
   const cached = cache.get(cacheKey);
 
-  // Cache for 1 hour
   if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+    const rate = cached.value[to];
+    if (!rate) {
+      return res.status(404).json({ error: 'Currency not supported' });
+    }
+
     return res.json({
       fromCurrency: from,
       toCurrency: to,
-      rate: cached.value,
-      provider: 'exchangerate.host'
+      rate,
+      provider: 'open-er-api'
     });
   }
 
   try {
-    const url =
-      `https://api.exchangerate.host/latest?base=${from}&symbols=${to}`;
+    const url = `https://open.er-api.com/v6/latest/${from}`;
 
     const response = await axios.get(url, { timeout: 8000 });
     const data = response.data || {};
 
-    if (!data.rates || !data.rates[to]) {
+    if (data.result !== 'success' || !data.rates) {
       throw new Error('Invalid FX response');
     }
 
     const rate = data.rates[to];
 
+    if (!rate) {
+      return res.status(404).json({ error: 'Currency not supported' });
+    }
+
     cache.set(cacheKey, {
       timestamp: now,
-      value: rate
+      value: data.rates
     });
 
     return res.json({
       fromCurrency: from,
       toCurrency: to,
       rate,
-      provider: 'exchangerate.host'
+      provider: 'open-er-api'
     });
 
   } catch (err) {
