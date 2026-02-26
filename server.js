@@ -267,7 +267,7 @@ app.get('/search', async (req, res) => {
 });
 
 // ----------------------------------------------------------------------------
-// GET /fx  (Finnhub)
+// GET /fx  (Finnhub via OANDA pairs)
 // ----------------------------------------------------------------------------
 app.get('/fx', async (req, res) => {
   const from = (req.query.from || '').toUpperCase().trim();
@@ -292,49 +292,45 @@ app.get('/fx', async (req, res) => {
     });
   }
 
-  const cacheKey = `fx:${from}`;
+  const pair = `OANDA:${from}${to}`;
+  const cacheKey = `fx:${pair}`;
   const now = Date.now();
   const cached = cache.get(cacheKey);
 
-  // Cache base currency rates for 1 hour
   if (cached && now - cached.timestamp < CACHE_TTL_MS) {
-    const rate = cached.value[to];
-    if (!rate) {
-      return res.status(404).json({ error: 'Currency not supported' });
-    }
-
     return res.json({
       fromCurrency: from,
       toCurrency: to,
-      rate,
+      rate: cached.value,
       provider: 'finnhub'
     });
   }
 
   try {
     const url =
-      'https://finnhub.io/api/v1/forex/rates?base=' +
-      encodeURIComponent(from) +
+      'https://finnhub.io/api/v1/quote?symbol=' +
+      encodeURIComponent(pair) +
       '&token=' +
       FINNHUB_API_KEY;
 
     const response = await axios.get(url, { timeout: 8000 });
-    const data = response.data || {};
-    const quotes = data.quote || {};
+    const q = response.data || {};
 
-    if (!quotes[to]) {
-      throw new Error('Currency not found in Finnhub response');
+    const rate = q.c ?? q.pc;
+
+    if (!rate) {
+      throw new Error('Invalid FX quote response');
     }
 
     cache.set(cacheKey, {
       timestamp: now,
-      value: quotes
+      value: rate
     });
 
     return res.json({
       fromCurrency: from,
       toCurrency: to,
-      rate: quotes[to],
+      rate,
       provider: 'finnhub'
     });
 
